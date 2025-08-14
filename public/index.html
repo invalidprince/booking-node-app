@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Room Booking App</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    label { display: block; margin-top: 0.5rem; }
+    select, input { padding: 0.3rem; margin-bottom: 0.5rem; }
+    button { padding: 0.5rem 1rem; margin-top: 0.5rem; }
+    table { border-collapse: collapse; margin-top: 1rem; }
+    th, td { border: 1px solid #ccc; padding: 0.5rem; }
+    th { background-color: #f2f2f2; }
+    #message { margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h2>Book a Room</h2>
+  <div id="booking-form">
+    <label for="room-select">Room:</label>
+    <select id="room-select"></select>
+    <label for="start">Start (local date &amp; time):</label>
+    <input type="datetime-local" id="start" />
+    <label for="end">End (local date &amp; time):</label>
+    <input type="datetime-local" id="end" />
+    <button id="book-btn">Book</button>
+    <div id="message"></div>
+  </div>
+  <h3>Existing Bookings</h3>
+  <table id="bookings-table">
+    <thead>
+      <tr><th>Room</th><th>Start</th><th>End</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    // Populate room dropdown
+    async function loadRooms() {
+      const res = await fetch('/api/rooms');
+      const rooms = await res.json();
+      const select = document.getElementById('room-select');
+      rooms.forEach(room => {
+        const option = document.createElement('option');
+        option.value = room.id;
+        option.textContent = `${room.name} (${room.type})`;
+        select.appendChild(option);
+      });
+    }
+
+    // Load and display existing bookings
+    async function loadBookings() {
+      const res = await fetch('/api/bookings');
+      const bookings = await res.json();
+      const tbody = document.querySelector('#bookings-table tbody');
+      tbody.innerHTML = '';
+      bookings.forEach(b => {
+        const room = roomLookup[b.room_id] || {name: b.room_id};
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${room.name}</td><td>${new Date(b.start).toLocaleString()}</td><td>${new Date(b.end).toLocaleString()}</td>`;
+        tbody.appendChild(row);
+      });
+    }
+
+    // Create a lookup for room id to room name
+    const roomLookup = {};
+
+    // Book button handler
+    async function handleBooking() {
+      const roomId = parseInt(document.getElementById('room-select').value);
+      const start = document.getElementById('start').value;
+      const end = document.getElementById('end').value;
+      const message = document.getElementById('message');
+      message.textContent = '';
+      if (!start || !end) {
+        message.textContent = 'Please choose start and end times.';
+        return;
+      }
+      try {
+        const res = await fetch('/api/bookings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ room_id: roomId, start, end })
+        });
+        if (res.status === 200) {
+          message.textContent = 'Booking successful!';
+          await loadBookings();
+        } else if (res.status === 409) {
+          message.textContent = 'That time slot is already booked.';
+        } else {
+          message.textContent = 'Booking failed.';
+        }
+      } catch (err) {
+        message.textContent = 'Error sending request.';
+      }
+    }
+
+    // Initialize page
+    async function init() {
+      // Load rooms and build lookup
+      const res = await fetch('/api/rooms');
+      const rooms = await res.json();
+      rooms.forEach(r => { roomLookup[r.id] = r; });
+      // Populate select
+      const select = document.getElementById('room-select');
+      rooms.forEach(room => {
+        const option = document.createElement('option');
+        option.value = room.id;
+        option.textContent = `${room.name} (${room.type})`;
+        select.appendChild(option);
+      });
+      // Load bookings
+      await loadBookings();
+    }
+    document.getElementById('book-btn').addEventListener('click', handleBooking);
+    init();
+  </script>
+</body>
+</html>
