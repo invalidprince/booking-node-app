@@ -1,119 +1,126 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang='en'>
 <head>
-  <meta charset="UTF-8">
+  <meta charset='UTF-8'>
   <title>Room Booking App</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 2rem; }
-    label { display: block; margin-top: 0.5rem; }
-    select, input { padding: 0.3rem; margin-bottom: 0.5rem; }
-    button { padding: 0.5rem 1rem; margin-top: 0.5rem; }
-    table { border-collapse: collapse; margin-top: 1rem; }
-    th, td { border: 1px solid #ccc; padding: 0.5rem; }
-    th { background-color: #f2f2f2; }
-    #message { margin-top: 0.5rem; }
+    body { font-family: Arial, sans-serif; margin: 2rem; background: #f8f9fa; color: #333; }
+    .card { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); max-width: 500px; margin-bottom: 2rem; }
+    h2 { margin-top: 0; }
+    label { display: block; margin-top: 0.5rem; font-weight: bold; }
+    input, select { padding: 0.4rem; margin-top: 0.25rem; width: 100%; box-sizing: border-box; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    table { width: 100%; border-collapse: collapse; margin-top: 2rem; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+    th { background: #e9ecef; }
+    #message { margin-top: 0.5rem; font-weight: bold; }
+    .success { color: green; }
+    .error { color: red; }
   </style>
 </head>
 <body>
-  <h2>Book a Room</h2>
-  <div id="booking-form">
-    <label for="room-select">Room:</label>
-    <select id="room-select"></select>
-    <label for="start">Start (local date &amp; time):</label>
-    <input type="datetime-local" id="start" />
-    <label for="end">End (local date &amp; time):</label>
-    <input type="datetime-local" id="end" />
-    <button id="book-btn">Book</button>
-    <div id="message"></div>
+  <div class='card'>
+    <h2>Book a Room</h2>
+    <div id='booking-form'>
+      <label for='name'>Full Name:</label>
+      <input type='text' id='name' />
+      <label for='email'>Email:</label>
+      <input type='email' id='email' />
+      <label for='room-select'>Room:</label>
+      <select id='room-select'></select>
+      <label for='date'>Date:</label>
+      <input type='date' id='date' />
+      <label for='start-time'>Start Time:</label>
+      <input type='time' id='start-time' />
+      <label for='end-time'>End Time:</label>
+      <input type='time' id='end-time' />
+      <button id='book-btn'>Book</button>
+      <div id='message'></div>
+    </div>
   </div>
   <h3>Existing Bookings</h3>
-  <table id="bookings-table">
+  <table id='bookings-table'>
     <thead>
-      <tr><th>Room</th><th>Start</th><th>End</th></tr>
+      <tr>
+        <th>Room</th>
+        <th>Date</th>
+        <th>Start</th>
+        <th>End</th>
+        <th>Name</th>
+        <th>Email</th>
+      </tr>
     </thead>
     <tbody></tbody>
   </table>
-
   <script>
-    // Populate room dropdown
+    const roomLookup = {};
     async function loadRooms() {
       const res = await fetch('/api/rooms');
       const rooms = await res.json();
       const select = document.getElementById('room-select');
       rooms.forEach(room => {
+        roomLookup[room.id] = room;
         const option = document.createElement('option');
         option.value = room.id;
         option.textContent = `${room.name} (${room.type})`;
         select.appendChild(option);
       });
     }
-
-    // Load and display existing bookings
     async function loadBookings() {
       const res = await fetch('/api/bookings');
       const bookings = await res.json();
       const tbody = document.querySelector('#bookings-table tbody');
       tbody.innerHTML = '';
       bookings.forEach(b => {
-        const room = roomLookup[b.room_id] || {name: b.room_id};
-        const row = document.createElement('tr');
-        row.innerHTML = `<td>${room.name}</td><td>${new Date(b.start).toLocaleString()}</td><td>${new Date(b.end).toLocaleString()}</td>`;
-        tbody.appendChild(row);
+        const room = roomLookup[b.room_id] || { name: b.room_id };
+        const startDate = new Date(b.start);
+        const endDate = new Date(b.end);
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${room.name}</td><td>${startDate.toLocaleDateString()}</td><td>${startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td><td>${endDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td><td>${b.name || ''}</td><td>${b.email || ''}</td>`;
+        tbody.appendChild(tr);
       });
     }
-
-    // Create a lookup for room id to room name
-    const roomLookup = {};
-
-    // Book button handler
     async function handleBooking() {
+      const name = document.getElementById('name').value.trim();
+      const email = document.getElementById('email').value.trim();
       const roomId = parseInt(document.getElementById('room-select').value);
-      const start = document.getElementById('start').value;
-      const end = document.getElementById('end').value;
-      const message = document.getElementById('message');
-      message.textContent = '';
-      if (!start || !end) {
-        message.textContent = 'Please choose start and end times.';
+      const date = document.getElementById('date').value;
+      const start = document.getElementById('start-time').value;
+      const end = document.getElementById('end-time').value;
+      const msgDiv = document.getElementById('message');
+      msgDiv.textContent = '';
+      msgDiv.className = '';
+      if (!name || !email || !date || !start || !end) {
+        msgDiv.textContent = 'Please fill out all fields.';
+        msgDiv.className = 'error';
         return;
       }
       try {
         const res = await fetch('/api/bookings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ room_id: roomId, start, end })
+          body: JSON.stringify({ room_id: roomId, date: date, start_time: start, end_time: end, name: name, email: email })
         });
         if (res.status === 200) {
-          message.textContent = 'Booking successful!';
+          msgDiv.textContent = 'Booking successful!';
+          msgDiv.className = 'success';
           await loadBookings();
         } else if (res.status === 409) {
-          message.textContent = 'That time slot is already booked.';
+          msgDiv.textContent = 'That time slot is already booked.';
+          msgDiv.className = 'error';
         } else {
-          message.textContent = 'Booking failed.';
+          const text = await res.text();
+          msgDiv.textContent = text || 'Booking failed.';
+          msgDiv.className = 'error';
         }
       } catch (err) {
-        message.textContent = 'Error sending request.';
+        msgDiv.textContent = 'Error submitting booking.';
+        msgDiv.className = 'error';
       }
     }
-
-    // Initialize page
-    async function init() {
-      // Load rooms and build lookup
-      const res = await fetch('/api/rooms');
-      const rooms = await res.json();
-      rooms.forEach(r => { roomLookup[r.id] = r; });
-      // Populate select
-      const select = document.getElementById('room-select');
-      rooms.forEach(room => {
-        const option = document.createElement('option');
-        option.value = room.id;
-        option.textContent = `${room.name} (${room.type})`;
-        select.appendChild(option);
-      });
-      // Load bookings
-      await loadBookings();
-    }
     document.getElementById('book-btn').addEventListener('click', handleBooking);
-    init();
+    loadRooms().then(loadBookings);
   </script>
 </body>
 </html>
