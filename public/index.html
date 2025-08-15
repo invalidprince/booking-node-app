@@ -3,184 +3,173 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Book a Space</title>
+  <title>Room & Desk Booking</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; background:#f8f9fa; color:#333; }
-    .card { background:#fff; padding:1.5rem; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); max-width:640px; margin-bottom:2rem; }
-    h2 { margin-top:0; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }
+    .topbar a { color:#007bff; text-decoration:none; }
+    .topbar a:hover { text-decoration:underline; }
+    .card { background:#fff; padding:1.5rem; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); max-width:650px; margin-bottom:2rem; }
     label { display:block; margin-top:0.5rem; font-weight:bold; }
-    input, select { width:100%; padding:0.4rem; margin-top:0.25rem; box-sizing:border-box; }
-    button { margin-top:1rem; padding:0.5rem 1rem; border:0; border-radius:4px; background:#007bff; color:#fff; cursor:pointer; }
+    input, select { width:100%; padding:0.4rem; margin-top:0.25rem; }
+    button { margin-top:1rem; padding:0.5rem 1rem; border-radius:4px; border:none; color:#fff; cursor:pointer; background:#007bff; }
     button:hover { background:#0056b3; }
-    table { width:100%; border-collapse:collapse; margin-top:1rem; }
-    th, td { border:1px solid #ddd; padding:0.5rem; text-align:left; }
-    th { background:#e9ecef; }
-    .row { display:flex; gap:1rem; }
+    .row { display:flex; gap:0.75rem; }
     .row > div { flex:1; }
-    .filters { display:flex; gap:0.75rem; align-items:end; margin-bottom:0.5rem; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { border:1px solid #ddd; padding:0.5rem; }
+    th { background:#e9ecef; }
+    .filters { display:flex; gap:0.75rem; align-items:end; margin-top:0.5rem; }
     .success { color:green; margin-top:0.5rem; }
     .error { color:red; margin-top:0.5rem; }
-    .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
-    .link { color:#007bff; text-decoration:none; }
-    .link:hover { text-decoration:underline; }
   </style>
 </head>
 <body>
   <div class="topbar">
     <h2>Room & Desk Booking</h2>
-    <a class="link" href="/admin" target="_blank">Admin portal →</a>
+    <a href="/admin" target="_blank">Admin portal →</a>
   </div>
 
+  <!-- Booking card -->
   <div class="card">
     <h3>Book a space</h3>
     <label>Full name</label>
     <input id="name" type="text" />
-
     <label>Email</label>
     <input id="email" type="email" />
-
     <label>Space</label>
-    <select id="room-select"></select>
-
+    <select id="room"></select>
     <div class="row">
-      <div>
-        <label>Date</label>
-        <input id="date" type="date" />
-      </div>
-      <div>
-        <label>Start time</label>
-        <input id="start-time" list="times" type="time" />
-      </div>
-      <div>
-        <label>End time</label>
-        <input id="end-time" list="times" type="time" />
-      </div>
+      <div><label>Date</label><input id="date" type="date" /></div>
+      <div><label>Start</label><input id="start" type="time" step="900" /></div>
+      <div><label>End</label><input id="end" type="time" step="900" /></div>
     </div>
-
-    <!-- “Clock-like” 15-min increments -->
-    <datalist id="times"></datalist>
-
-    <button id="book-btn">Book</button>
-    <div id="message"></div>
+    <button id="book">Book</button>
+    <div id="msg"></div>
   </div>
 
+  <!-- Availability / auto-book card -->
+  <div class="card">
+    <h3>Check availability</h3>
+    <div class="row">
+      <div><label>Date</label><input id="avail-date" type="date" /></div>
+      <div><label>Start</label><input id="avail-start" type="time" step="900" /></div>
+      <div><label>End</label><input id="avail-end" type="time" step="900" /></div>
+    </div>
+    <button id="check-avail">Check availability</button>
+    <button id="auto-book">Auto book desk/office</button>
+    <div id="avail-result"></div>
+  </div>
+
+  <!-- Bookings table -->
   <div class="card">
     <h3>Existing bookings</h3>
     <div class="filters">
-      <div>
-        <label>Filter by date</label>
-        <input id="filter-date" type="date" />
-      </div>
-      <div>
-        <label>Filter by space</label>
-        <select id="filter-room"><option value="">All</option></select>
-      </div>
-      <button id="apply-filters">Apply</button>
-      <button id="clear-filters" type="button">Clear</button>
+      <div><label>Date</label><input id="filter-date" type="date" /></div>
+      <div><label>Space</label><select id="filter-room"><option value="">All</option></select></div>
+      <button id="apply-filter">Apply</button>
+      <button id="clear-filter">Clear</button>
     </div>
-
-    <table id="bookings-table">
-      <thead>
-        <tr>
-          <th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Name</th><th>Email</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
+    <table>
+      <thead><tr><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Name</th><th>Email</th></tr></thead>
+      <tbody id="tbody"></tbody>
     </table>
   </div>
 
 <script>
-  const roomLookup = {};
+const roomLookup = {};
 
-  function fillTimeDatalist() {
-    const dl = document.getElementById('times');
-    dl.innerHTML = '';
-    for (let h = 0; h < 24; h++) {
-      for (let m = 0; m < 60; m += 15) {
-        const hh = String(h).padStart(2,'0');
-        const mm = String(m).padStart(2,'0');
-        const opt = document.createElement('option');
-        opt.value = `${hh}:${mm}`;
-        dl.appendChild(opt);
-      }
-    }
-  }
-
-  async function loadRooms() {
-    const res = await fetch('/api/rooms');
-    const rooms = await res.json();
-    const select = document.getElementById('room-select');
-    const filter = document.getElementById('filter-room');
-    filter.innerHTML = '<option value="">All</option>';
-    rooms.forEach(r => {
-      roomLookup[r.id] = r;
-      const o1 = document.createElement('option');
-      o1.value = r.id; o1.textContent = `${r.name} (${r.type})`;
-      select.appendChild(o1);
-      const o2 = document.createElement('option');
-      o2.value = r.id; o2.textContent = `${r.name} (${r.type})`;
-      filter.appendChild(o2);
-    });
-  }
-
-  async function loadBookings() {
-    const params = new URLSearchParams();
-    const d = document.getElementById('filter-date').value;
-    const r = document.getElementById('filter-room').value;
-    if (d) params.set('date', d);
-    if (r) params.set('room_id', r);
-    const res = await fetch('/api/bookings' + (params.toString() ? `?${params}` : ''));
-    const list = await res.json();
-    const tbody = document.querySelector('#bookings-table tbody');
-    tbody.innerHTML = '';
-    list.forEach(b => {
-      const s = new Date(b.start);
-      const e = new Date(b.end);
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${roomLookup[b.room_id]?.name || b.room_id}</td>
-        <td>${s.toLocaleDateString()}</td>
-        <td>${s.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-        <td>${e.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
-        <td>${b.name || ''}</td>
-        <td>${b.email || ''}</td>
-      `;
-      tbody.appendChild(tr);
-    });
-  }
-
-  async function submitBooking() {
-    const name = document.getElementById('name').value.trim();
-    const email = document.getElementById('email').value.trim();
-    const roomId = parseInt(document.getElementById('room-select').value, 10);
-    const date = document.getElementById('date').value;
-    const start = document.getElementById('start-time').value;
-    const end = document.getElementById('end-time').value;
-    const msg = document.getElementById('message');
-    msg.textContent = ''; msg.className = '';
-
-    if (!name || !email || !roomId || !date || !start || !end) {
-      msg.textContent = 'Please fill out all fields.'; msg.className = 'error'; return;
-    }
-    const res = await fetch('/api/bookings', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ room_id: roomId, date, start_time: start, end_time: end, name, email })
-    });
-    if (res.status === 200) { msg.textContent = 'Booking successful!'; msg.className = 'success'; loadBookings(); }
-    else if (res.status === 409) { msg.textContent = 'That time slot is already booked.'; msg.className = 'error'; }
-    else { msg.textContent = await res.text(); msg.className = 'error'; }
-  }
-
-  document.getElementById('book-btn').addEventListener('click', submitBooking);
-  document.getElementById('apply-filters').addEventListener('click', loadBookings);
-  document.getElementById('clear-filters').addEventListener('click', () => {
-    document.getElementById('filter-date').value = '';
-    document.getElementById('filter-room').value = '';
-    loadBookings();
+async function loadRooms() {
+  const rooms = await (await fetch('/api/rooms')).json();
+  const select = document.getElementById('room');
+  const filter = document.getElementById('filter-room');
+  rooms.forEach(r => {
+    roomLookup[r.id] = r;
+    const opt1=document.createElement('option'); opt1.value=r.id; opt1.textContent=`${r.name} (${r.type})`; select.appendChild(opt1);
+    const opt2=document.createElement('option'); opt2.value=r.id; opt2.textContent=`${r.name} (${r.type})`; filter.appendChild(opt2);
   });
+}
 
-  fillTimeDatalist();
-  loadRooms().then(loadBookings);
+function formatTime(d) { return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}); }
+
+async function loadBookings() {
+  const params=new URLSearchParams();
+  const d=document.getElementById('filter-date').value;
+  const r=document.getElementById('filter-room').value;
+  if (d) params.set('date', d);
+  if (r) params.set('room_id', r);
+  const list = await (await fetch('/api/bookings'+(params.toString()?`?${params}`:''))).json();
+  const tb=document.getElementById('tbody'); tb.innerHTML='';
+  list.forEach(b => {
+    const tr=document.createElement('tr');
+    const s=new Date(b.start), e=new Date(b.end);
+    tr.innerHTML = `
+      <td>${roomLookup[b.room_id]?.name || b.room_id}</td>
+      <td>${s.toLocaleDateString()}</td>
+      <td>${formatTime(s)}</td>
+      <td>${formatTime(e)}</td>
+      <td>${b.name||''}</td>
+      <td>${b.email||''}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+async function createBooking() {
+  const name=document.getElementById('name').value.trim();
+  const email=document.getElementById('email').value.trim();
+  const room_id=parseInt(document.getElementById('room').value,10);
+  const date=document.getElementById('date').value;
+  const start=document.getElementById('start').value;
+  const end=document.getElementById('end').value;
+  const msg=document.getElementById('msg'); msg.textContent=''; msg.className='';
+  if (!name||!email||!room_id||!date||!start||!end) { msg.textContent='Please fill out all fields'; msg.className='error'; return; }
+  const res=await fetch('/api/bookings',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,email,room_id,date,start_time:start,end_time:end}) });
+  if (res.status===200) { msg.textContent='Booking successful!'; msg.className='success'; loadBookings(); }
+  else if (res.status===409) { msg.textContent='Time slot already booked.'; msg.className='error'; }
+  else { msg.textContent=await res.text(); msg.className='error'; }
+}
+
+async function checkAvailability() {
+  const date=document.getElementById('avail-date').value;
+  const start=document.getElementById('avail-start').value;
+  const end=document.getElementById('avail-end').value;
+  const resDiv=document.getElementById('avail-result');
+  resDiv.innerHTML='';
+  if (!date||!start||!end) { resDiv.textContent='Please choose date and time'; return; }
+  const res=await fetch(`/api/availability?date=${encodeURIComponent(date)}&start_time=${encodeURIComponent(start)}&end_time=${encodeURIComponent(end)}`);
+  const data=await res.json();
+  data.forEach(item => {
+    const p=document.createElement('p');
+    p.textContent=`${item.name} (${item.type}): ${item.available?'Available':'Booked'}`;
+    resDiv.appendChild(p);
+  });
+}
+
+async function autoBook() {
+  const date=document.getElementById('avail-date').value;
+  const start=document.getElementById('avail-start').value;
+  const end=document.getElementById('avail-end').value;
+  const name=document.getElementById('name').value.trim();
+  const email=document.getElementById('email').value.trim();
+  const msg=document.getElementById('avail-result');
+  msg.textContent='';
+  if (!date||!start||!end||!name||!email) { msg.textContent='Complete date/time and name/email'; msg.className='error'; return; }
+  const res=await fetch('/api/bookings/auto', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date, start_time:start, end_time:end, name, email }) });
+  if (res.status===200) { msg.textContent='Auto-booked successfully!'; msg.className='success'; loadBookings(); }
+  else { msg.textContent=await res.text(); msg.className='error'; }
+}
+
+document.getElementById('book').addEventListener('click', createBooking);
+document.getElementById('apply-filter').addEventListener('click', loadBookings);
+document.getElementById('clear-filter').addEventListener('click', () => {
+  document.getElementById('filter-date').value='';
+  document.getElementById('filter-room').value='';
+  loadBookings();
+});
+document.getElementById('check-avail').addEventListener('click', checkAvailability);
+document.getElementById('auto-book').addEventListener('click', autoBook);
+
+loadRooms().then(loadBookings);
 </script>
 </body>
 </html>
