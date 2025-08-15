@@ -1,0 +1,363 @@
+<!-- public/admin.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Portal</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin:2rem; background:#f8f9fa; color:#333; }
+    .card { background:#fff; padding:1rem 1.5rem; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); margin-bottom:1.25rem; }
+    h2, h3 { margin:0.2rem 0 0.8rem 0; }
+    label { display:block; margin-top:0.5rem; font-weight:bold; }
+    input, select { width:100%; padding:0.4rem; margin-top:0.25rem; box-sizing:border-box; }
+    button { margin-top:0.75rem; padding:0.5rem 1rem; border:0; border-radius:4px; background:#007bff; color:#fff; cursor:pointer; }
+    button:hover { background:#0056b3; }
+    .row { display:flex; gap:0.75rem; }
+    .row > div { flex:1; }
+    table { width:100%; border-collapse:collapse; margin-top:0.5rem; }
+    th, td { border:1px solid #ddd; padding:0.5rem; text-align:left; }
+    th { background:#e9ecef; }
+    .danger { background:#dc3545; } .danger:hover { background:#b02a37; }
+    .muted { color:#666; font-size:0.9em; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+    .link { color:#007bff; text-decoration:none; }
+    .link:hover { text-decoration:underline; }
+    .hidden { display:none; }
+    .ok { color:green; } .err { color:red; }
+    .small { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h2>Admin Portal</h2>
+    <a class="link" href="/" target="_blank">← Back to booking</a>
+  </div>
+
+  <!-- Login -->
+  <div id="login-card" class="card">
+    <h3>Login</h3>
+    <div class="row">
+      <div><label>Email</label><input id="login-email" type="email" value="admin@example.com"></div>
+      <div><label>Password</label><input id="login-password" type="password" value="admin123"></div>
+    </div>
+    <button id="login-btn">Login</button>
+    <div id="login-msg" class="small"></div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dash" class="hidden">
+    <!-- Create bookings (supports recurrence) -->
+    <div class="card">
+      <h3>Create booking(s)</h3>
+      <div class="row">
+        <div><label>Full name</label><input id="b-name" type="text"></div>
+        <div><label>Email</label><input id="b-email" type="email"></div>
+      </div>
+      <div class="row">
+        <div><label>Space</label><select id="b-room"></select></div>
+        <div><label>Date</label><input id="b-date" type="date"></div>
+      </div>
+      <div class="row">
+        <div><label>Start</label><input id="b-start" list="times" type="time"></div>
+        <div><label>End</label>  <input id="b-end"   list="times" type="time"></div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Frequency</label>
+          <select id="b-freq">
+            <option value="none">One-time</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div><label>Occurrences</label><input id="b-occ" type="number" min="1" value="1"></div>
+        <div><label>Series label (optional)</label><input id="b-label" type="text" placeholder="e.g. Team A Mondays"></div>
+      </div>
+      <datalist id="times"></datalist>
+      <button id="b-create">Create</button>
+      <div id="b-msg" class="small"></div>
+    </div>
+
+    <!-- Existing bookings -->
+    <div class="card">
+      <h3>Bookings</h3>
+      <div class="row">
+        <div><label>Filter date</label><input id="f-date" type="date"></div>
+        <div><label>Filter space</label><select id="f-room"><option value="">All</option></select></div>
+        <div style="align-self:flex-end"><button id="f-apply">Apply</button></div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Name</th><th>Email</th><th>Series</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="t-bookings"></tbody>
+      </table>
+      <div class="muted small">Tip: “Delete series” removes all with the same Recurrence Group.</div>
+    </div>
+
+    <!-- Spaces -->
+    <div class="card">
+      <h3>Spaces</h3>
+      <div class="row">
+        <div><label>Name</label><input id="r-name" type="text" placeholder="Office 5"></div>
+        <div>
+          <label>Type</label>
+          <select id="r-type">
+            <option value="office">office</option>
+            <option value="desk">desk</option>
+            <option value="conference">conference</option>
+          </select>
+        </div>
+        <div style="align-self:flex-end"><button id="r-add">Add space</button></div>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Actions</th></tr></thead>
+        <tbody id="t-rooms"></tbody>
+      </table>
+    </div>
+
+    <!-- Admin users -->
+    <div class="card">
+      <h3>Admin users</h3>
+      <div class="row">
+        <div><label>Name</label><input id="u-name" type="text"></div>
+        <div><label>Email</label><input id="u-email" type="email"></div>
+        <div><label>Password</label><input id="u-pass" type="text"></div>
+        <div style="align-self:flex-end"><button id="u-add">Create admin</button></div>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Actions</th></tr></thead>
+        <tbody id="t-users"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  const state = { token: null, rooms: [], roomLookup: {} };
+
+  function fillTimesDL() {
+    const dl = document.getElementById('times');
+    dl.innerHTML = '';
+    for (let h=0; h<24; h++) for (let m=0; m<60; m+=15) {
+      const hh = String(h).padStart(2,'0'), mm = String(m).padStart(2,'0');
+      const o=document.createElement('option'); o.value=`${hh}:${mm}`; dl.appendChild(o);
+    }
+  }
+
+  async function adminFetch(path, opts={}) {
+    opts.headers = Object.assign({}, opts.headers || {}, { 'Authorization': 'Bearer ' + state.token });
+    const res = await fetch(path, opts);
+    if (res.status === 401) { alert('Session expired. Please log in again.'); location.reload(); }
+    return res;
+  }
+
+  async function login() {
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value.trim();
+    const msg = document.getElementById('login-msg');
+    msg.textContent = '';
+    try {
+      const res = await fetch('/api/admin/login', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, password })
+      });
+      if (res.status !== 200) { msg.textContent = 'Invalid login'; msg.className = 'err small'; return; }
+      const data = await res.json();
+      state.token = data.token;
+      document.getElementById('login-card').classList.add('hidden');
+      document.getElementById('dash').classList.remove('hidden');
+      await loadRooms();
+      await refreshBookings();
+      await refreshUsers();
+    } catch (e) { msg.textContent = 'Network error'; msg.className = 'err small'; }
+  }
+
+  async function loadRooms() {
+    // public rooms for selects
+    const res = await fetch('/api/rooms'); const rooms = await res.json();
+    state.rooms = rooms; state.roomLookup = {};
+    rooms.forEach(r => state.roomLookup[r.id]=r);
+    const br = document.getElementById('b-room'); br.innerHTML = '';
+    const fr = document.getElementById('f-room'); fr.innerHTML = '<option value=\"\">All</option>';
+    rooms.forEach(r => {
+      const o1=document.createElement('option'); o1.value=r.id; o1.textContent=`${r.name} (${r.type})`; br.appendChild(o1);
+      const o2=document.createElement('option'); o2.value=r.id; o2.textContent=`${r.name} (${r.type})`; fr.appendChild(o2);
+    });
+
+    // admin list for editing/adding rooms table
+    const adminRooms = await (await adminFetch('/api/admin/rooms')).json();
+    const tbody = document.getElementById('t-rooms'); tbody.innerHTML = '';
+    adminRooms.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${r.id}</td><td>${r.name}</td><td>${r.type}</td>
+        <td><button data-id=\"${r.id}\" class=\"edit-room\">Edit</button></td>`;
+      tbody.appendChild(tr);
+    });
+
+    // inline edit handler
+    tbody.querySelectorAll('.edit-room').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute('data-id');
+        const name = prompt('New name (leave blank to keep):');
+        const type = prompt('New type (office/desk/conference) (leave blank to keep):');
+        const payload = {};
+        if (name) payload.name = name;
+        if (type) payload.type = type;
+        if (!name && !type) return;
+        const res = await adminFetch('/api/admin/rooms/'+id, {
+          method:'PATCH', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if (res.status===200) { await loadRooms(); }
+        else { alert(await res.text()); }
+      };
+    });
+  }
+
+  async function refreshBookings() {
+    const params = new URLSearchParams();
+    const d = document.getElementById('f-date').value;
+    const r = document.getElementById('f-room').value;
+    if (d) params.set('date', d);
+    if (r) params.set('room_id', r);
+    const list = await (await adminFetch('/api/admin/bookings' + (params.toString()?`?${params}`:''))).json();
+    const tbody = document.getElementById('t-bookings'); tbody.innerHTML = '';
+    list.forEach(b => {
+      const s = new Date(b.start), e = new Date(b.end);
+      const room = state.roomLookup[b.room_id]?.name || b.room_id;
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${b.id}</td><td>${room}</td>
+        <td>${s.toLocaleDateString()}</td>
+        <td>${s.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+        <td>${e.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</td>
+        <td>${b.name||''}</td><td>${b.email||''}</td>
+        <td class="small">${b.recurrence_label||''}<br><span class="muted">${b.recurrence_group||''}</span></td>
+        <td>
+          <button class="edit" data-id="${b.id}">Edit</button>
+          <button class="danger del" data-id="${b.id}">Delete</button>
+          ${b.recurrence_group ? `<button class="danger del-series" data-g="${b.recurrence_group}">Delete series</button>` : ''}
+        </td>`;
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll('.del').forEach(btn => btn.onclick = async () => {
+      const id = btn.getAttribute('data-id');
+      if (!confirm('Delete this booking?')) return;
+      const res = await adminFetch('/api/admin/bookings/'+id, { method:'DELETE' });
+      if (res.status === 200) refreshBookings(); else alert(await res.text());
+    });
+
+    tbody.querySelectorAll('.del-series').forEach(btn => btn.onclick = async () => {
+      const g = btn.getAttribute('data-g');
+      if (!confirm('Delete the whole series?')) return;
+      const res = await adminFetch('/api/admin/recurrence/'+g, { method:'DELETE' });
+      if (res.status === 200) refreshBookings(); else alert(await res.text());
+    });
+
+    tbody.querySelectorAll('.edit').forEach(btn => btn.onclick = async () => {
+      const id = btn.getAttribute('data-id');
+      const date = prompt('New date (YYYY-MM-DD) or blank to keep:');
+      const start = prompt('New start time (HH:MM) or blank to keep:');
+      const end   = prompt('New end time (HH:MM) or blank to keep:');
+      const payload = {};
+      if (date) payload.date = date;
+      if (start) payload.start_time = start;
+      if (end) payload.end_time = end;
+      if (!date && !start && !end) return;
+      const res = await adminFetch('/api/admin/bookings/'+id, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      if (res.status === 200) refreshBookings(); else alert(await res.text());
+    });
+  }
+
+  async function createBookings() {
+    const name = document.getElementById('b-name').value.trim();
+    const email = document.getElementById('b-email').value.trim();
+    const room = parseInt(document.getElementById('b-room').value, 10);
+    const date = document.getElementById('b-date').value;
+    const start= document.getElementById('b-start').value;
+    const end  = document.getElementById('b-end').value;
+    const freq = document.getElementById('b-freq').value;
+    const occ  = document.getElementById('b-occ').value;
+    const label= document.getElementById('b-label').value.trim();
+    const msg = document.getElementById('b-msg');
+    msg.textContent=''; msg.className='';
+
+    if (!name || !email || !room || !date || !start || !end) {
+      msg.textContent = 'Please fill all fields'; msg.className='err small'; return;
+    }
+    const res = await adminFetch('/api/admin/bookings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ room_id:room, date, start_time:start, end_time:end, name, email, frequency:freq, occurrences:occ, recurrence_label:label })
+    });
+    if (res.status === 200) {
+      const data = await res.json();
+      msg.textContent = `Created ${data.created} booking(s).`; msg.className='ok small';
+      refreshBookings();
+    } else if (res.status === 409) {
+      msg.textContent = 'Conflict with an existing booking.'; msg.className='err small';
+    } else {
+      msg.textContent = await res.text(); msg.className='err small';
+    }
+  }
+
+  async function addRoom() {
+    const name = document.getElementById('r-name').value.trim();
+    const type = document.getElementById('r-type').value;
+    if (!name) return alert('Enter a name');
+    const res = await adminFetch('/api/admin/rooms', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, type })
+    });
+    if (res.status===200) { document.getElementById('r-name').value=''; await loadRooms(); }
+    else alert(await res.text());
+  }
+
+  async function refreshUsers() {
+    const users = await (await adminFetch('/api/admin/users')).json();
+    const tbody = document.getElementById('t-users'); tbody.innerHTML = '';
+    users.forEach(u => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${u.id}</td><td>${u.name}</td><td>${u.email}</td>
+        <td><button class="edit-user" data-id="${u.id}">Edit</button></td>`;
+      tbody.appendChild(tr);
+    });
+    tbody.querySelectorAll('.edit-user').forEach(btn => btn.onclick = async () => {
+      const id = btn.getAttribute('data-id');
+      const name = prompt('New name (leave blank to keep):');
+      const email = prompt('New email (leave blank to keep):');
+      const password = prompt('New password (leave blank to keep):');
+      const payload = {};
+      if (name) payload.name = name;
+      if (email) payload.email = email;
+      if (password) payload.password = password;
+      if (!name && !email && !password) return;
+      const res = await adminFetch('/api/admin/users/'+id, {
+        method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      });
+      if (res.status===200) refreshUsers(); else alert(await res.text());
+    });
+  }
+
+  document.getElementById('login-btn').addEventListener('click', login);
+  document.getElementById('f-apply').addEventListener('click', refreshBookings);
+  document.getElementById('b-create').addEventListener('click', createBookings);
+  document.getElementById('r-add').addEventListener('click', addRoom);
+  document.getElementById('u-add').addEventListener('click', async () => {
+    const n = document.getElementById('u-name').value.trim();
+    const e = document.getElementById('u-email').value.trim();
+    const p = document.getElementById('u-pass').value.trim();
+    if (!n || !e || !p) return alert('Fill all user fields');
+    const res = await adminFetch('/api/admin/users', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:n, email:e, password:p }) });
+    if (res.status===200) { document.getElementById('u-name').value=''; document.getElementById('u-email').value=''; document.getElementById('u-pass').value=''; refreshUsers(); }
+    else alert(await res.text());
+  });
+
+  fillTimesDL();
+</script>
+</body>
+</html>
