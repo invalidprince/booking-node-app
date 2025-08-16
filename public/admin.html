@@ -14,6 +14,8 @@
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
     th { background: #fafafa; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .recurrence-controls select, .recurrence-controls input { min-width: 80px; }
+    .recurrence-controls label { margin-left: 4px; }
   </style>
 </head>
 <body>
@@ -33,6 +35,7 @@
       <button id="logoutBtn">Logout</button>
     </div>
 
+    <!-- Spaces management -->
     <div class="card">
       <h2>Spaces</h2>
       <div class="row">
@@ -45,35 +48,82 @@
         <input id="spacePriority" type="number" placeholder="Priority (1 = highest)" value="1" min="1">
         <button id="addSpaceBtn">Add Space</button>
       </div>
-      <table id="spacesTable"><thead><tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr></thead><tbody></tbody></table>
+      <table id="spacesTable">
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
+    <!-- Bookings management -->
     <div class="card">
       <h2>Bookings</h2>
       <div class="row">
-        <input id="bName" placeholder="Name"><input id="bEmail" placeholder="Email">
+        <input id="bName" placeholder="Name">
+        <input id="bEmail" placeholder="Email">
         <input id="bDate" type="date">
-        <input id="bStart" placeholder="Start (HH:MM)"><input id="bEnd" placeholder="End (HH:MM)">
+        <input id="bStart" placeholder="Start (HH:MM)">
+        <input id="bEnd" placeholder="End (HH:MM)">
         <select id="bSpace"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
-      <table id="bookingsTable"><thead><tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Action</th></tr></thead><tbody></tbody></table>
+      <!-- Recurrence controls -->
+      <div class="row recurrence-controls">
+        <label for="bRecurrenceType">Recurrence:</label>
+        <select id="bRecurrenceType">
+          <option value="none">None</option>
+          <option value="day">Monthly – Day of month</option>
+          <option value="weekday">Monthly – Nth weekday</option>
+        </select>
+        <input id="bRecurrenceDay" type="number" min="1" max="31" placeholder="Day" class="hidden">
+        <select id="bRecurrenceNth" class="hidden">
+          <option value="1">1st</option>
+          <option value="2">2nd</option>
+          <option value="3">3rd</option>
+          <option value="4">4th</option>
+          <option value="5">5th</option>
+        </select>
+        <select id="bRecurrenceWeekday" class="hidden">
+          <option value="0">Sunday</option>
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="5">Friday</option>
+          <option value="6">Saturday</option>
+        </select>
+      </div>
+      <table id="bookingsTable">
+        <thead>
+          <tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Recurring</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
+    <!-- Admin user management -->
     <div class="card">
       <h2>Admin Users</h2>
       <div class="row">
-        <input id="aUser" placeholder="username (email)"><input id="aPass" placeholder="password">
+        <input id="aUser" placeholder="username (email)">
+        <input id="aPass" placeholder="password">
         <button id="addAdminBtn">Add Admin</button>
       </div>
-      <table id="adminsTable"><thead><tr><th>Username</th><th>Action</th></tr></thead><tbody></tbody></table>
+      <table id="adminsTable">
+        <thead>
+          <tr><th>Username</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
 
   <script>
     let token = localStorage.getItem('adminToken') || '';
 
-    function setAuthHeaders(opts={}) {
+    // Helper to attach auth headers for admin requests
+    function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
       opts.headers['Authorization'] = 'Bearer ' + token;
       return opts;
@@ -82,7 +132,11 @@
     async function login() {
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value.trim();
-      const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ username, password }) });
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
       if (res.ok) {
         const data = await res.json();
         token = data.token;
@@ -91,7 +145,7 @@
         document.getElementById('app').classList.remove('hidden');
         await refreshAll();
       } else {
-        const err = await res.json().catch(()=>({error:'Login failed'}));
+        const err = await res.json().catch(() => ({ error: 'Login failed' }));
         document.getElementById('loginStatus').textContent = err.error || 'Login failed';
       }
     }
@@ -113,13 +167,14 @@
           <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
         tbody.appendChild(tr);
       });
-      const res2 = await fetch('/api/spaces');
-      const spaces2 = await res2.json();
+      // Populate booking space selector
       const sSel = document.getElementById('bSpace');
       sSel.innerHTML = '';
-      spaces2.forEach(s => {
+      spaces.forEach(s => {
         const opt = document.createElement('option');
-        opt.value = s.id; opt.textContent = s.name; sSel.appendChild(opt);
+        opt.value = s.id;
+        opt.textContent = s.name;
+        sSel.appendChild(opt);
       });
     }
 
@@ -127,12 +182,15 @@
       const name = document.getElementById('spaceName').value.trim();
       const type = document.getElementById('spaceType').value;
       const priorityOrder = Number(document.getElementById('spacePriority').value || '1');
-      const res = await fetch('/api/spaces', setAuthHeaders({ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name, type, priorityOrder }) }));
-      if (res.ok) { await loadSpaces(); document.getElementById('spaceName').value=''; }
+      const res = await fetch('/api/spaces', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, type, priorityOrder }) }));
+      if (res.ok) {
+        await loadSpaces();
+        document.getElementById('spaceName').value = '';
+      }
     }
 
     async function deleteSpace(id) {
-      await fetch('/api/spaces/' + id, setAuthHeaders({ method:'DELETE' }));
+      await fetch('/api/spaces/' + id, setAuthHeaders({ method: 'DELETE' }));
       await loadSpaces();
     }
 
@@ -143,7 +201,7 @@
       tbody.innerHTML = '';
       bookings.forEach(b => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${b.startTime}</td><td>${b.endTime}</td>
+        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${b.startTime}</td><td>${b.endTime}</td><td>${b.recurring ? 'Yes' : 'No'}</td>
           <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
         tbody.appendChild(tr);
       });
@@ -156,15 +214,35 @@
         date: document.getElementById('bDate').value,
         startTime: document.getElementById('bStart').value,
         endTime: document.getElementById('bEnd').value,
-        spaceId: document.getElementById('bSpace').value,
-        recurring: false
+        spaceId: document.getElementById('bSpace').value
       };
-      const res = await fetch('/api/bookings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      if (res.ok) { await loadBookings(); }
+      // Determine recurrence object
+      const recType = document.getElementById('bRecurrenceType').value;
+      let recurring = false;
+      if (recType === 'day') {
+        const day = document.getElementById('bRecurrenceDay').value;
+        if (day) {
+          recurring = { frequency: 'monthly', dayOfMonth: parseInt(day, 10) };
+        }
+      } else if (recType === 'weekday') {
+        const nth = document.getElementById('bRecurrenceNth').value;
+        const weekday = document.getElementById('bRecurrenceWeekday').value;
+        if (nth && weekday) {
+          recurring = { frequency: 'monthly', nth: parseInt(nth, 10), weekday: parseInt(weekday, 10) };
+        }
+      }
+      body.recurring = recurring;
+      const res = await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (res.ok) {
+        await loadBookings();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Booking failed' }));
+        alert(err.error || 'Booking failed');
+      }
     }
 
     async function deleteBooking(id) {
-      await fetch('/api/bookings/' + id, setAuthHeaders({ method:'DELETE' }));
+      await fetch('/api/bookings/' + id, setAuthHeaders({ method: 'DELETE' }));
       await loadBookings();
     }
 
@@ -181,9 +259,35 @@
     }
 
     async function addAdmin() {
-      const body = { username: document.getElementById('aUser').value.trim(), password: document.getElementById('aPass').value.trim() };
-      const res = await fetch('/api/admins', setAuthHeaders({ method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }));
-      if (res.ok) { await loadAdmins(); }
+      const body = {
+        username: document.getElementById('aUser').value.trim(),
+        password: document.getElementById('aPass').value.trim()
+      };
+      const res = await fetch('/api/admins', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+      if (res.ok) {
+        await loadAdmins();
+      }
+    }
+
+    // Show/hide recurrence inputs depending on selected type
+    function updateRecurrenceFields() {
+      const type = document.getElementById('bRecurrenceType').value;
+      const dayInput = document.getElementById('bRecurrenceDay');
+      const nthSelect = document.getElementById('bRecurrenceNth');
+      const weekdaySelect = document.getElementById('bRecurrenceWeekday');
+      if (type === 'day') {
+        dayInput.classList.remove('hidden');
+        nthSelect.classList.add('hidden');
+        weekdaySelect.classList.add('hidden');
+      } else if (type === 'weekday') {
+        dayInput.classList.add('hidden');
+        nthSelect.classList.remove('hidden');
+        weekdaySelect.classList.remove('hidden');
+      } else {
+        dayInput.classList.add('hidden');
+        nthSelect.classList.add('hidden');
+        weekdaySelect.classList.add('hidden');
+      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -193,12 +297,32 @@
         refreshAll();
       }
       document.getElementById('loginBtn').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', () => { localStorage.removeItem('adminToken'); token=''; location.reload(); });
+      document.getElementById('logoutBtn').addEventListener('click', () => {
+        localStorage.removeItem('adminToken');
+        token = '';
+        location.reload();
+      });
       document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
-      document.getElementById('spacesTable').addEventListener('click', (e) => { if (e.target.classList.contains('delSpace')) deleteSpace(e.target.dataset.id); });
+      document.getElementById('spacesTable').addEventListener('click', (e) => {
+        if (e.target.classList.contains('delSpace')) {
+          deleteSpace(e.target.dataset.id);
+        }
+      });
       document.getElementById('addBookingBtn').addEventListener('click', addBooking);
-      document.getElementById('bookingsTable').addEventListener('click', (e) => { if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id); });
+      document.getElementById('bookingsTable').addEventListener('click', (e) => {
+        if (e.target.classList.contains('delBooking')) {
+          deleteBooking(e.target.dataset.id);
+        }
+      });
       document.getElementById('addAdminBtn').addEventListener('click', addAdmin);
+      document.getElementById('adminsTable').addEventListener('click', (e) => {
+        if (e.target.classList.contains('delAdmin')) {
+          const id = e.target.dataset.id;
+          fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
+        }
+      });
+      document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
+      updateRecurrenceFields();
     });
   </script>
 </body>
