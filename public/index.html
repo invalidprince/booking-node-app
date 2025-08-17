@@ -190,6 +190,13 @@
         statusEl.textContent = 'Please fill in all fields.';
         return;
       }
+      // Validate email domain on client side (trim and normalise)
+      const emailNormalized = email.toLowerCase().trim();
+      if (!emailNormalized.endsWith('@fbhi.net')) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Email must be a @fbhi.net address.';
+        return;
+      }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
       try {

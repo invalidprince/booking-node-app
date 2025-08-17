@@ -1,7 +1,10 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const nodemailer = require('nodemailer');
 
 /*
  * Simple office booking application
@@ -26,6 +29,68 @@ const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
+
+// Base URL used in emails for links. Should be set via the environment when deployed
+const APP_BASE_URL = process.env.APP_BASE_URL || '';
+
+// Initialise an email transporter if SMTP environment variables are provided.
+// If not provided, sendEmail will fall back to console logging.
+let mailTransporter = null;
+if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  mailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: (process.env.SMTP_SECURE === 'true'),
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
+}
+
+// ----- Data persistence configuration -----
+// Path to the JSON file used to persist data across restarts.
+const DATA_FILE = path.join(__dirname, 'data.json');
+
+/**
+ * Load persisted spaces, bookings and admins from disk. If the file does not
+ * exist or cannot be parsed, the in-memory defaults remain unchanged.
+ */
+function loadData() {
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.spaces)) {
+      spaces.splice(0, spaces.length, ...data.spaces);
+    }
+    if (Array.isArray(data.bookings)) {
+      bookings.splice(0, bookings.length, ...data.bookings);
+    }
+    if (Array.isArray(data.admins)) {
+      admins.splice(0, admins.length, ...data.admins);
+    }
+  } catch (err) {
+    // File not found or invalid JSON; will be created on first save
+    // console.warn('No data file found or parse error:', err);
+  }
+}
+
+/**
+ * Persist the current spaces, bookings and admins to disk. Tokens are not
+ * persisted because they are only valid for the lifetime of the process.
+ */
+function saveData() {
+  const out = {
+    spaces,
+    bookings,
+    admins
+  };
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
+  } catch (err) {
+    console.error('Failed to save data:', err);
+  }
+}
 
 // Middleware
 app.use(cors());
@@ -64,14 +129,31 @@ const admins = [
 // Logged‑in admin tokens map token -> adminId
 const tokens = {};
 
+// Load persisted data from disk (if any). This will overwrite the default
+// values defined above if a data file exists.
+loadData();
+
 // ----- Helper functions ------------------------------------------------------
 
 function sendEmail(to, subject, text) {
-  console.log('\n--- EMAIL NOTIFICATION ---');
-  console.log(`To: ${to}`);
-  console.log(`Subject: ${subject}`);
-  console.log(text);
-  console.log('--------------------------\n');
+  // If a transporter and from address are configured, attempt to send a real email
+  if (mailTransporter && process.env.MAIL_FROM) {
+    mailTransporter.sendMail({
+      from: process.env.MAIL_FROM,
+      to,
+      subject,
+      text
+    }).catch(err => {
+      console.error('Email send error:', err);
+    });
+  } else {
+    // Fallback to console logging so that notifications are visible during development
+    console.log('\n--- EMAIL NOTIFICATION ---');
+    console.log(`To: ${to}`);
+    console.log(`Subject: ${subject}`);
+    console.log(text);
+    console.log('--------------------------\n');
+  }
 }
 
 /**
@@ -174,6 +256,8 @@ app.post('/api/spaces', adminAuth, (req, res) => {
   }
   const id = uuidv4();
   spaces.push({ id, name, type, priorityOrder: Number(priorityOrder) });
+  // Persist changes
+  saveData();
   res.json({ id });
 });
 
@@ -182,6 +266,7 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
   const index = spaces.findIndex(r => r.id === id);
   if (index >= 0) {
     spaces.splice(index, 1);
+    saveData();
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Space not found' });
@@ -222,6 +307,11 @@ app.post('/api/bookings', (req, res) => {
   if (!name || !email || !spaceId || !date || !startTime || !endTime) {
     return res.status(400).json({ error: 'Missing fields' });
   }
+  // Enforce company email domain (trim and normalise case)
+  const emailNormalized = String(email).trim().toLowerCase();
+  if (!emailNormalized.endsWith('@fbhi.net')) {
+    return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
+  }
   if (String(spaceId).startsWith('auto-')) {
     return res.status(400).json({ error: 'Use /api/bookings/auto for auto-booking' });
   }
@@ -237,11 +327,21 @@ app.post('/api/bookings', (req, res) => {
     return res.status(400).json({ error: 'Space is not available for the requested time' });
   }
   const id = uuidv4();
-  bookings.push({ id, name, email, spaceId, date, startTime, endTime, recurring: rec });
+  bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec });
+  // Persist changes
+  saveData();
+  // Build a cancellation link. If APP_BASE_URL is set, use it; otherwise omit the URL.
+  let cancelLink = '';
+  if (APP_BASE_URL) {
+    cancelLink = `${APP_BASE_URL}/cancel/${id}`;
+  }
+  const confirmationMessage =
+    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${startTime} to ${endTime} has been confirmed.` +
+    (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
   sendEmail(
-    email,
+    emailNormalized,
     'Booking Confirmation',
-    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${startTime} to ${endTime} has been confirmed.`
+    confirmationMessage
   );
   res.json({ id });
 });
@@ -258,9 +358,40 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
       'Booking Cancelled',
       `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.`
     );
+    // Persist changes
+    saveData();
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Booking not found' });
+  }
+});
+
+// Public cancellation link. Allows a user to cancel their own booking via a unique URL.
+// When accessed, this removes the booking from the system, sends a cancellation email
+// and returns a simple HTML response indicating the result.
+app.get('/cancel/:id', (req, res) => {
+  const { id } = req.params;
+  const index = bookings.findIndex(b => b.id === id);
+  if (index >= 0) {
+    const [removed] = bookings.splice(index, 1);
+    saveData();
+    const space = spaces.find(s => s.id === removed.spaceId);
+    // Send cancellation email to the user
+    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.`;
+    sendEmail(removed.email, 'Booking Cancelled', cancelMsg);
+    res.send(
+      '<html><head><title>Booking Cancelled</title></head><body>' +
+      '<h1>Booking Cancelled</h1>' +
+      '<p>Your booking has been cancelled successfully.</p>' +
+      '</body></html>'
+    );
+  } else {
+    res.status(404).send(
+      '<html><head><title>Booking Not Found</title></head><body>' +
+      '<h1>Booking Not Found</h1>' +
+      '<p>The booking you are trying to cancel does not exist.</p>' +
+      '</body></html>'
+    );
   }
 });
 
@@ -288,17 +419,32 @@ app.get('/api/bookings/auto', (req, res) => {
   if (!type || !date || !startTime || !endTime || !name || !email) {
     return res.status(400).json({ error: 'Missing parameters for auto-booking' });
   }
+  // Enforce company email domain for auto bookings (trim and normalise case)
+  const emailNormalized = String(email).trim().toLowerCase();
+  if (!emailNormalized.endsWith('@fbhi.net')) {
+    return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
+  }
   const candidates = spaces
     .filter(s => s.type === type)
     .sort((a, b) => a.priorityOrder - b.priorityOrder);
   for (const space of candidates) {
     if (isSpaceAvailable(space.id, date, startTime, endTime)) {
       const id = uuidv4();
-      bookings.push({ id, name, email, spaceId: space.id, date, startTime, endTime, recurring: false });
+      bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false });
+      // Persist immediately so that cancellation link works even if the process restarts
+      saveData();
+      // Construct cancellation link
+      let cancelLink = '';
+      if (APP_BASE_URL) {
+        cancelLink = `${APP_BASE_URL}/cancel/${id}`;
+      }
+      const confirmationMessage =
+        `Your booking for ${space.name} on ${date} from ${startTime} to ${endTime} has been confirmed.` +
+        (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
       sendEmail(
-        email,
+        emailNormalized,
         'Booking Confirmation',
-        `Your booking for ${space.name} on ${date} from ${startTime} to ${endTime} has been confirmed.`
+        confirmationMessage
       );
       return res.json({ id, spaceName: space.name });
     }
@@ -321,6 +467,7 @@ app.post('/api/admins', adminAuth, (req, res) => {
   }
   const id = uuidv4();
   admins.push({ id, username, password });
+  saveData();
   res.json({ id });
 });
 
@@ -329,6 +476,7 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
   const index = admins.findIndex(a => a.id === id);
   if (index >= 0) {
     admins.splice(index, 1);
+    saveData();
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Admin not found' });
