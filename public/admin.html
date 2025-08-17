@@ -75,6 +75,7 @@
           <option value="none">None</option>
           <option value="day">Monthly – Day of month</option>
           <option value="weekday">Monthly – Nth weekday</option>
+          <option value="weekly">Weekly</option>
         </select>
         <input id="bRecurrenceDay" type="number" min="1" max="31" placeholder="Day" class="hidden">
         <select id="bRecurrenceNth" class="hidden">
@@ -230,6 +231,11 @@
         if (nth && weekday) {
           recurring = { frequency: 'monthly', nth: parseInt(nth, 10), weekday: parseInt(weekday, 10) };
         }
+      } else if (recType === 'weekly') {
+        const weekday = document.getElementById('bRecurrenceWeekday').value;
+        if (weekday) {
+          recurring = { frequency: 'weekly', weekday: parseInt(weekday, 10) };
+        }
       }
       body.recurring = recurring;
       const res = await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -283,6 +289,11 @@
         dayInput.classList.add('hidden');
         nthSelect.classList.remove('hidden');
         weekdaySelect.classList.remove('hidden');
+      } else if (type === 'weekly') {
+        // Weekly recurrence: show weekday only
+        dayInput.classList.add('hidden');
+        nthSelect.classList.add('hidden');
+        weekdaySelect.classList.remove('hidden');
       } else {
         dayInput.classList.add('hidden');
         nthSelect.classList.add('hidden');
@@ -300,7 +311,8 @@
       document.getElementById('logoutBtn').addEventListener('click', () => {
         localStorage.removeItem('adminToken');
         token = '';
-        location.reload();
+        // Redirect to the booking page after logout instead of reloading
+        location.href = 'index.html';
       });
       document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
       document.getElementById('spacesTable').addEventListener('click', (e) => {

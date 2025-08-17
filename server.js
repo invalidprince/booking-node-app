@@ -85,6 +85,10 @@ function isRecurringOnDate(dateStr, recurring) {
   if (!recurring || typeof recurring !== 'object') return false;
   const d = new Date(dateStr);
   // Normalise to midnight in the local timezone
+  // Weekly recurrence: occurs on the same weekday each week
+  if (recurring.frequency === 'weekly' && recurring.weekday !== undefined && recurring.weekday !== null) {
+    return d.getDay() === Number(recurring.weekday);
+  }
   if (recurring.dayOfMonth !== undefined && recurring.dayOfMonth !== null) {
     return d.getDate() === Number(recurring.dayOfMonth);
   } else if (

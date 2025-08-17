@@ -20,13 +20,16 @@
     .link-bar { text-align: center; margin-bottom: 16px; }
     .link-bar a { margin: 0 8px; color: #007bff; text-decoration: none; }
     .link-bar a:hover { text-decoration: underline; }
+    /* Styles for availability results */
+    .yes { color: #2e7d32; font-weight: bold; }
+    .no { color: #c62828; font-weight: bold; }
   </style>
 </head>
 <body>
   <h1>Book a Space</h1>
-  <div class="link-bar">
-    <!-- Navigation link to the availability page -->
-    <a href="availability.html">Check Availability</a>
+  <div class="link-bar" style="text-align: right;">
+    <!-- Link to Admin portal on top right -->
+    <a href="admin.html" id="adminLink">Admin Portal</a>
   </div>
   <div class="card">
     <div class="field">
@@ -55,6 +58,21 @@
     </div>
     <button id="book-btn" type="button">Book</button>
     <div class="status" id="status"></div>
+  </div>
+
+  <!-- Availability section -->
+  <div class="card" id="availability-section">
+    <h2>Check Space Availability</h2>
+    <div class="field">
+      <label for="avDate">Date</label>
+      <input type="date" id="avDate">
+    </div>
+    <div class="field">
+      <label for="avSpace">Space</label>
+      <select id="avSpace"></select>
+    </div>
+    <button id="checkBtn" type="button">Check Availability</button>
+    <div id="results"></div>
   </div>
 
   <script>
@@ -216,7 +234,92 @@
       createTimePicker('start-time');
       createTimePicker('end-time');
       document.getElementById('book-btn').addEventListener('click', doBook);
+
+      // Availability initialization
+      populateAvailSpaces();
+      document.getElementById('checkBtn').addEventListener('click', checkAvailability);
     });
+
+    // Populate spaces for availability check (without auto options)
+    async function populateAvailSpaces() {
+      try {
+        const res = await fetch('/api/spaces');
+        const data = await res.json();
+        const sel = document.getElementById('avSpace');
+        sel.innerHTML = '';
+        data.forEach(space => {
+          const opt = document.createElement('option');
+          opt.value = space.id;
+          opt.textContent = space.name;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Generate time slots in 30 minute increments between 08:00 and 18:00
+    function generateTimeSlots() {
+      const slots = [];
+      const pad = n => String(n).padStart(2, '0');
+      for (let hour = 8; hour < 18; hour++) {
+        const h1 = pad(hour);
+        const h2 = pad(hour + 1);
+        slots.push({ start: `${h1}:00`, end: `${h1}:30` });
+        slots.push({ start: `${h1}:30`, end: `${h2}:00` });
+      }
+      return slots;
+    }
+
+    // Check space availability and render results
+    async function checkAvailability() {
+      const date = document.getElementById('avDate').value;
+      const spaceId = document.getElementById('avSpace').value;
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '';
+      if (!date || !spaceId) {
+        resultsDiv.textContent = 'Please select a date and space.';
+        return;
+      }
+      // Fetch spaces to determine the selected space type
+      let spacesList = [];
+      try {
+        const resSpaces = await fetch('/api/spaces');
+        spacesList = await resSpaces.json();
+      } catch (err) {
+        console.error(err);
+      }
+      const selected = spacesList.find(s => s.id === spaceId);
+      if (!selected) {
+        resultsDiv.textContent = 'Invalid space.';
+        return;
+      }
+      const slots = generateTimeSlots();
+      // Query availability for each slot in parallel
+      const promises = slots.map(async ({ start, end }) => {
+        const params = new URLSearchParams({ date, start, end });
+        params.append('type', selected.type);
+        const res = await fetch('/api/availability?' + params.toString());
+        const avail = await res.json();
+        const isAvail = avail.some(s => s.id === spaceId);
+        return { start, end, available: isAvail };
+      });
+      const results = await Promise.all(promises);
+      // Build table output
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Time</th><th>Available</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      results.forEach(r => {
+        const tr = document.createElement('tr');
+        const timeLabel = `${r.start} - ${r.end}`;
+        tr.innerHTML = `<td>${timeLabel}</td><td class="${r.available ? 'yes' : 'no'}">${r.available ? 'Yes' : 'No'}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      resultsDiv.appendChild(table);
+    }
   </script>
 </body>
 </html>
