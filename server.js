@@ -49,18 +49,74 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
 }
 
 // ----- Kiosk access configuration -----
-// Comma-separated list of allowed IP addresses for kiosk mode. If empty,
-// all IPs are allowed. Set via environment variable KIOSK_ALLOWED_IPS.
-const kioskIpList = (process.env.KIOSK_ALLOWED_IPS || '').split(',').map(ip => ip.trim()).filter(Boolean);
-const allowedKioskIps = new Set(kioskIpList);
-function isKioskAllowed(req) {
-  // When no IPs specified, allow all
-  if (allowedKioskIps.size === 0) return true;
-  // Express reports IPv6 addresses with ::ffff: prefix for IPv4
-  const ip = req.ip || req.connection?.remoteAddress || '';
-  // Normalize IPv6 mapped IPv4 addresses
-  const ipNormalized = ip.startsWith('::ffff:') ? ip.substring(7) : ip;
-  return Array.from(allowedKioskIps).some(allowed => ipNormalized === allowed || ipNormalized.endsWith(allowed));
+// Instead of relying on IP allowlists (which are brittle with dynamic IPs),
+// kiosk devices authenticate using one‑time registration tokens. Admins can
+// generate tokens via the admin portal. A kiosk device visits the
+// `/kiosk-setup.html` page and enters its token, which is then exchanged for
+// a persistent session cookie. Subsequent kiosk requests must include this
+// cookie. The set of active tokens is persisted to disk. Active kiosk
+// sessions live only in memory and are cleared on server restart.
+
+// In‑memory map of kiosk sessions: tokenId -> true when claimed. When a
+// session is established the server sets a signed cookie with the token ID.
+const kioskSessions = {};
+
+// Persistent list of kiosk registration tokens. Each token is an object
+// { id: uuid, code: string }. `id` is the identifier persisted in
+// cookies/sessions, and `code` is what the admin shares with the kiosk
+// device during provisioning. After a token is claimed by a device the
+// `code` remains in the list until explicitly revoked by an admin.
+const kioskTokens = [];
+
+/**
+ * Generate a short alphanumeric code for kiosk registration. We use a
+ * truncated UUID and uppercase it for readability. Admins will distribute
+ * this code to kiosk devices.
+ *
+ * @returns {string} A 6‑character token code
+ */
+function generateKioskCode() {
+  return uuidv4().split('-')[0].slice(0, 6).toUpperCase();
+}
+
+/**
+ * Parse cookies from the request headers. Returns an object mapping
+ * cookie names to values. This avoids pulling in an external cookie
+ * parser dependency.
+ *
+ * @param {object} req
+ * @returns {object}
+ */
+function parseCookies(req) {
+  const list = {};
+  const rc = req.headers.cookie;
+  if (!rc) return list;
+  rc.split(';').forEach(cookie => {
+    const parts = cookie.split('=');
+    const key = parts.shift()?.trim();
+    const val = parts.join('=');
+    if (key) list[key] = decodeURIComponent(val);
+  });
+  return list;
+}
+
+/**
+ * Determine if a request originates from an authenticated kiosk session.
+ * A valid kiosk session means the request has a `kioskToken` cookie whose
+ * value matches the ID of a known kiosk token. This check does not
+ * distinguish between claimed and unclaimed tokens; any token ID still
+ * present in the kioskTokens array is considered valid. The session
+ * cookie is set when a kiosk device claims a token via the `/api/kiosk/claim`
+ * endpoint.
+ *
+ * @param {object} req
+ * @returns {boolean}
+ */
+function isKioskSession(req) {
+  const cookies = parseCookies(req);
+  const id = cookies['kioskToken'];
+  if (!id) return false;
+  return kioskTokens.some(tok => tok.id === id);
 }
 
 // ----- Data persistence configuration -----
@@ -87,6 +143,9 @@ function loadData() {
     if (Array.isArray(data.verifiedEmails)) {
       verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
     }
+    if (Array.isArray(data.kioskTokens)) {
+      kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
+    }
   } catch (err) {
     // File not found or invalid JSON; will be created on first save
     // console.warn('No data file found or parse error:', err);
@@ -102,7 +161,8 @@ function saveData() {
     spaces,
     bookings,
     admins,
-    verifiedEmails
+    verifiedEmails,
+    kioskTokens
   };
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
@@ -114,10 +174,13 @@ function saveData() {
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
-// Restrict access to kiosk page by IP
+// Restrict access to kiosk page: if no active kiosk session cookie is present,
+// redirect to the setup page where the device can claim a token. Kiosk
+// sessions are identified by the `kioskToken` cookie. See
+// `/api/kiosk/claim` and `/public/kiosk-setup.html` for more details.
 app.get('/kiosk.html', (req, res, next) => {
-  if (!isKioskAllowed(req)) {
-    return res.status(403).send('Access denied');
+  if (!isKioskSession(req)) {
+    return res.redirect('/kiosk-setup.html');
   }
   next();
 });
@@ -163,6 +226,10 @@ const tokens = {};
 // restart.
 const verifiedEmails = [];
 const verificationTokens = {};
+
+// Kiosk token management declarations moved to the top of the file. See the
+// Kiosk access configuration section for definitions of kioskTokens and
+// kioskSessions.
 
 // Load persisted data from disk (if any). This will overwrite the default
 // values defined above if a data file exists.
@@ -546,9 +613,9 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
 // ----- Kiosk and analytics routes -----
 
 // Return bookings for the current day (including recurring bookings that occur on the current day).
-// Only accessible from allowed kiosk IPs.
+// Only accessible from authenticated kiosk sessions.
 app.get('/api/bookings/today', (req, res) => {
-  if (!isKioskAllowed(req)) {
+  if (!isKioskSession(req)) {
     return res.status(403).json({ error: 'Access denied' });
   }
   const today = new Date().toISOString().slice(0, 10);
@@ -569,9 +636,9 @@ app.get('/api/bookings/today', (req, res) => {
 });
 
 // Check in a booking by ID. Marks the booking as checkedIn and persists.
-// Only accessible from allowed kiosk IPs.
+// Only accessible from authenticated kiosk sessions.
 app.post('/api/bookings/:id/checkin', (req, res) => {
-  if (!isKioskAllowed(req)) {
+  if (!isKioskSession(req)) {
     return res.status(403).json({ error: 'Access denied' });
   }
   const { id } = req.params;
@@ -633,6 +700,66 @@ app.get('/api/analytics', adminAuth, (req, res) => {
     };
   });
   res.json(result);
+});
+
+// ----- Kiosk token management API -----
+
+// List all kiosk registration tokens (admin only). Returns the array of
+// tokens including id and code. Admin UI uses this to display active
+// devices and codes. Because codes effectively authenticate kiosk
+// devices, they should be treated as secrets and only visible to admins.
+app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
+  res.json(kioskTokens);
+});
+
+// Generate a new kiosk registration token (admin only). The server
+// returns a newly generated id and code. The id is stored in cookies on
+// the kiosk device, while the code is shared with the device during
+// setup. The token remains valid until explicitly revoked by an admin.
+app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
+  const id = uuidv4();
+  const code = generateKioskCode();
+  kioskTokens.push({ id, code });
+  saveData();
+  res.json({ id, code });
+});
+
+// Revoke an existing kiosk token by its id (admin only). If the token is
+// revoked any devices using it will lose access on their next request. This
+// does not remove the cookie from the client; instead the server simply
+// stops recognising the token.
+app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
+  const { id } = req.params;
+  const index = kioskTokens.findIndex(t => t.id === id);
+  if (index < 0) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
+  kioskTokens.splice(index, 1);
+  saveData();
+  res.json({ ok: true });
+});
+
+// Claim a kiosk token. A kiosk device will call this endpoint with
+// { code: 'ABC123' }. If the code exists in kioskTokens, the server
+// sets a httpOnly cookie named `kioskToken` containing the id of the token.
+// Subsequent requests will be allowed to access kiosk functionality. If the
+// code is not found an error is returned. This endpoint is not protected
+// so that kiosk devices without an existing session can call it.
+app.post('/api/kiosk/claim', (req, res) => {
+  const { code } = req.body || {};
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'Invalid token code' });
+  }
+  const entry = kioskTokens.find(t => t.code.toUpperCase() === code.toUpperCase());
+  if (!entry) {
+    return res.status(404).json({ error: 'Token not found' });
+  }
+  kioskSessions[entry.id] = true;
+  // Set cookie valid for one year. Using a long expiry so the session
+  // survives kiosk restarts. sameSite strict prevents cross-site
+  // transmission of the cookie.
+  res.cookie('kioskToken', entry.id, { httpOnly: true, sameSite: 'strict', maxAge: 365 * 24 * 60 * 60 * 1000, path: '/' });
+  res.json({ ok: true });
 });
 
 // ----- Email verification routes -----

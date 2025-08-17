@@ -127,6 +127,21 @@
       <button id="loadAnalyticsBtn">Load Analytics</button>
       <div id="analyticsResults" style="margin-top:12px;"></div>
     </div>
+
+    <!-- Kiosk management section -->
+    <div class="card">
+      <h2>Kiosk Devices</h2>
+      <div class="row">
+        <button id="generateKioskBtn">Generate Token</button>
+      </div>
+      <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
+      <table id="kioskTokensTable">
+        <thead>
+          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
@@ -164,6 +179,7 @@
       await loadSpaces();
       await loadBookings();
       await loadAdmins();
+      await loadKioskTokens();
     }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
@@ -414,6 +430,51 @@
       });
     }
 
+    // Load kiosk tokens from the server and render into the table
+    async function loadKioskTokens() {
+      const tableBody = document.querySelector('#kioskTokensTable tbody');
+      if (!tableBody) return;
+      try {
+        const res = await fetch('/api/kiosk/tokens', setAuthHeaders());
+        if (!res.ok) throw new Error('Failed to load kiosk tokens');
+        const tokens = await res.json();
+        tableBody.innerHTML = '';
+        tokens.forEach(t => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td><td><button data-id="${t.id}" class="delKiosk">Revoke</button></td>`;
+          tableBody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Request a new kiosk token from the server and display the result
+    async function generateKioskToken() {
+      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST' }));
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to generate token' }));
+        alert(err.error || 'Failed to generate token');
+        return;
+      }
+      const data = await res.json();
+      // Show the token code to the admin so it can be provisioned on a kiosk device
+      const display = document.getElementById('newKioskToken');
+      display.textContent = `Token code: ${data.code}`;
+      await loadKioskTokens();
+    }
+
+    // Revoke a kiosk token by ID
+    async function revokeKioskToken(id) {
+      const res = await fetch('/api/kiosk/tokens/' + id, setAuthHeaders({ method: 'DELETE' }));
+      if (res.ok) {
+        await loadKioskTokens();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed to revoke token' }));
+        alert(err.error || 'Failed to revoke token');
+      }
+    }
+
     // Load analytics data and render a table
     async function loadAnalytics() {
       const res = await fetch('/api/analytics', setAuthHeaders());
@@ -524,6 +585,21 @@
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
       if (analyticsBtn) {
         analyticsBtn.addEventListener('click', loadAnalytics);
+      }
+
+      // Bind kiosk management actions
+      const genBtn = document.getElementById('generateKioskBtn');
+      if (genBtn) {
+        genBtn.addEventListener('click', generateKioskToken);
+      }
+      const kioskTable = document.getElementById('kioskTokensTable');
+      if (kioskTable) {
+        kioskTable.addEventListener('click', (e) => {
+          if (e.target.classList.contains('delKiosk')) {
+            const id = e.target.dataset.id;
+            revokeKioskToken(id);
+          }
+        });
       }
 
     });
