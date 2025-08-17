@@ -16,6 +16,8 @@
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .recurrence-controls select, .recurrence-controls input { min-width: 80px; }
     .recurrence-controls label { margin-left: 4px; }
+    /* Timepicker dropdown styling (copied from main booking page) */
+    .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
   </style>
 </head>
 <body>
@@ -63,8 +65,8 @@
         <input id="bName" placeholder="Name">
         <input id="bEmail" placeholder="Email">
         <input id="bDate" type="date">
-        <input id="bStart" placeholder="Start (HH:MM)">
-        <input id="bEnd" placeholder="End (HH:MM)">
+        <input id="bStart" placeholder="Start Time" readonly>
+        <input id="bEnd" placeholder="End Time" readonly>
         <select id="bSpace"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
@@ -157,6 +159,79 @@
       await loadAdmins();
     }
 
+    // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
+    function convertTo24h(str) {
+      if (!str) return '';
+      const parts = str.trim().split(' ');
+      if (parts.length < 2) return str;
+      const time = parts[0], period = parts[1];
+      let [hour, minute] = time.split(':');
+      hour = parseInt(hour, 10);
+      if (period === 'PM' && hour !== 12) hour += 12;
+      if (period === 'AM' && hour === 12) hour = 0;
+      return `${hour.toString().padStart(2, '0')}:${minute}`;
+    }
+
+    // Create a custom time picker similar to the main booking page
+    function createTimePicker(inputId) {
+      const input = document.getElementById(inputId);
+      const container = document.createElement('div');
+      container.className = 'timepicker-dropdown';
+      container.style.position = 'absolute';
+      container.style.display = 'none';
+      container.style.background = '#fff';
+      container.style.border = '1px solid #ccc';
+      container.style.padding = '6px';
+      container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+      container.style.zIndex = 1000;
+      const hourSelect = document.createElement('select');
+      for (let i = 1; i <= 12; i++) {
+        const opt = document.createElement('option');
+        opt.value = i < 10 ? '0' + i : '' + i;
+        opt.textContent = opt.value;
+        hourSelect.appendChild(opt);
+      }
+      const minuteSelect = document.createElement('select');
+      ['00', '15', '30', '45'].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        minuteSelect.appendChild(opt);
+      });
+      const periodSelect = document.createElement('select');
+      ['AM', 'PM'].forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        periodSelect.appendChild(opt);
+      });
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const value = `${hourSelect.value}:${minuteSelect.value} ${periodSelect.value}`;
+        input.value = value;
+        container.style.display = 'none';
+      };
+      container.appendChild(hourSelect);
+      container.appendChild(minuteSelect);
+      container.appendChild(periodSelect);
+      container.appendChild(setBtn);
+      document.body.appendChild(container);
+      input.addEventListener('focus', () => {
+        const rect = input.getBoundingClientRect();
+        container.style.left = `${rect.left + window.scrollX}px`;
+        container.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        container.style.display = 'block';
+      });
+      document.addEventListener('click', (e) => {
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
+      });
+    }
+
     // Convert 24h time to 12h with AM/PM for display
     function to12Hour(time) {
       if (typeof time !== 'string' || !time.includes(':')) return time;
@@ -167,6 +242,55 @@
       h = h % 12;
       if (h === 0) h = 12;
       return `${h}:${m} ${ampm}`;
+    }
+
+    // Format recurrence object into a human friendly string
+    function formatRecurrence(rec) {
+      if (!rec) return '';
+      if (rec.frequency === 'weekly' && rec.weekday !== undefined) {
+        return `Weekly – ${weekdayName(rec.weekday)}`;
+      }
+      if (rec.frequency === 'monthly') {
+        if (rec.dayOfMonth !== undefined) {
+          return `Monthly – ${ordinal(rec.dayOfMonth)}`;
+        }
+        if (rec.nth !== undefined && rec.weekday !== undefined) {
+          return `Monthly – ${ordinalNth(rec.nth)} ${weekdayName(rec.weekday)}`;
+        }
+      }
+      return '';
+    }
+
+    function weekdayName(index) {
+      const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const i = Number(index);
+      return names[i] || '';
+    }
+
+    function ordinal(n) {
+      const i = parseInt(n, 10);
+      if (isNaN(i)) return n;
+      const s = ['th','st','nd','rd'];
+      const v = i % 100;
+      return i + (s[(v - 20) % 10] || s[v] || s[0]);
+    }
+
+    function ordinalNth(n) {
+      const i = parseInt(n, 10);
+      const ord = ordinal(i);
+      // Remove the numeric part, leave only the ordinal indicator
+      return ord;
+    }
+
+    // Format date as "Weekday, MM/DD/YYYY"
+    function formatDateWithDay(dateStr) {
+      if (!dateStr) return dateStr;
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = weekdayName(d.getDay());
+      const mm = String(d.getMonth() + 1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const yyyy = d.getFullYear();
+      return `${day}, ${mm}/${dd}/${yyyy}`;
     }
 
     async function loadSpaces() {
@@ -216,19 +340,24 @@
         const tr = document.createElement('tr');
         const start12 = to12Hour(b.startTime);
         const end12 = to12Hour(b.endTime);
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${start12}</td><td>${end12}</td><td>${b.recurring ? 'Yes' : 'No'}</td>
+        const dateFormatted = formatDateWithDay(b.date);
+        const recurrenceDesc = formatRecurrence(b.recurrence);
+        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12}</td><td>${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
           <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
         tbody.appendChild(tr);
       });
     }
 
     async function addBooking() {
+      const rawStart = document.getElementById('bStart').value;
+      const rawEnd = document.getElementById('bEnd').value;
       const body = {
         name: document.getElementById('bName').value.trim(),
         email: document.getElementById('bEmail').value.trim(),
         date: document.getElementById('bDate').value,
-        startTime: document.getElementById('bStart').value,
-        endTime: document.getElementById('bEnd').value,
+        // Convert 12h input values to 24h for API submission
+        startTime: convertTo24h(rawStart),
+        endTime: convertTo24h(rawEnd),
         spaceId: document.getElementById('bSpace').value
       };
       // Determine recurrence object
@@ -349,6 +478,22 @@
       });
       document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
       updateRecurrenceFields();
+
+      // Initialise time pickers for start and end times
+      createTimePicker('bStart');
+      createTimePicker('bEnd');
+
+      // Auto-fill the booking email with the verified email and make read-only
+      try {
+        const verifiedFlag = localStorage.getItem('emailVerified');
+        const verifiedEmail = localStorage.getItem('verifiedEmail');
+        if (verifiedFlag === 'true' && verifiedEmail) {
+          const emailInput = document.getElementById('bEmail');
+          emailInput.value = verifiedEmail;
+          emailInput.readOnly = true;
+          emailInput.style.background = '#f0f0f0';
+        }
+      } catch (e) {}
     });
   </script>
 </body>

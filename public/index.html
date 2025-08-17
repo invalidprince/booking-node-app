@@ -272,6 +272,18 @@
       // Show verification overlay on first visit if email not verified
       checkVerificationStatus();
       document.getElementById('verifyBtn').addEventListener('click', requestVerification);
+
+      // If a verified email is stored, prefill the email field and prevent editing
+      try {
+        const verifiedFlag = localStorage.getItem('emailVerified');
+        const verifiedEmail = localStorage.getItem('verifiedEmail');
+        const emailInput = document.getElementById('email');
+        if (verifiedFlag === 'true' && verifiedEmail) {
+          emailInput.value = verifiedEmail;
+          emailInput.readOnly = true;
+          emailInput.style.background = '#f0f0f0';
+        }
+      } catch (e) {}
     });
 
     // Show or hide verification overlay depending on localStorage flag

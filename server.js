@@ -320,7 +320,10 @@ app.get('/api/bookings', adminAuth, (req, res) => {
       date: b.date,
       startTime: b.startTime,
       endTime: b.endTime,
-      recurring: !!b.recurring
+      // boolean flag for legacy clients
+      recurring: !!b.recurring,
+      // include the full recurrence object for front‑end formatting
+      recurrence: b.recurring || null
     };
   });
   res.json(result);
