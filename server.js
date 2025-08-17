@@ -69,6 +69,9 @@ function loadData() {
     if (Array.isArray(data.admins)) {
       admins.splice(0, admins.length, ...data.admins);
     }
+    if (Array.isArray(data.verifiedEmails)) {
+      verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
+    }
   } catch (err) {
     // File not found or invalid JSON; will be created on first save
     // console.warn('No data file found or parse error:', err);
@@ -83,7 +86,8 @@ function saveData() {
   const out = {
     spaces,
     bookings,
-    admins
+    admins,
+    verifiedEmails
   };
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
@@ -128,6 +132,14 @@ const admins = [
 
 // Logged‑in admin tokens map token -> adminId
 const tokens = {};
+
+// Verified end‑user email addresses. Only these addresses are allowed to make
+// bookings. This list is persisted across restarts. The corresponding
+// verificationTokens map token strings to email addresses pending
+// verification. verificationTokens are not persisted and are cleared on
+// restart.
+const verifiedEmails = [];
+const verificationTokens = {};
 
 // Load persisted data from disk (if any). This will overwrite the default
 // values defined above if a data file exists.
@@ -188,6 +200,28 @@ function isRecurringOnDate(dateStr, recurring) {
     return count === Number(recurring.nth);
   }
   return false;
+}
+
+/**
+ * Convert a 24‑hour time string (HH:MM) to a 12‑hour format with AM/PM.
+ *
+ * If the input is invalid or not a string in HH:MM format, it is returned unchanged.
+ * Examples:
+ *   to12Hour('13:30') -> '1:30 PM'
+ *   to12Hour('00:15') -> '12:15 AM'
+ *
+ * @param {string} time Time in 24‑hour format
+ * @returns {string} Time in 12‑hour format
+ */
+function to12Hour(time) {
+  if (typeof time !== 'string' || !time.includes(':')) return time;
+  const [hStr, m] = time.split(':');
+  let h = parseInt(hStr, 10);
+  if (isNaN(h)) return time;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
 }
 
 /**
@@ -312,6 +346,10 @@ app.post('/api/bookings', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
+  // Ensure the email is verified before allowing booking
+  if (!verifiedEmails.includes(emailNormalized)) {
+    return res.status(403).json({ error: 'Email not verified. Please verify your email before booking.' });
+  }
   if (String(spaceId).startsWith('auto-')) {
     return res.status(400).json({ error: 'Use /api/bookings/auto for auto-booking' });
   }
@@ -336,7 +374,7 @@ app.post('/api/bookings', (req, res) => {
     cancelLink = `${APP_BASE_URL}/cancel/${id}`;
   }
   const confirmationMessage =
-    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${startTime} to ${endTime} has been confirmed.` +
+    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
     (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
   sendEmail(
     emailNormalized,
@@ -356,7 +394,7 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
     sendEmail(
       removed.email,
       'Booking Cancelled',
-      `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.`
+      `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`
     );
     // Persist changes
     saveData();
@@ -377,7 +415,7 @@ app.get('/cancel/:id', (req, res) => {
     saveData();
     const space = spaces.find(s => s.id === removed.spaceId);
     // Send cancellation email to the user
-    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.`;
+    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
     sendEmail(removed.email, 'Booking Cancelled', cancelMsg);
     res.send(
       '<html><head><title>Booking Cancelled</title></head><body>' +
@@ -424,6 +462,10 @@ app.get('/api/bookings/auto', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
+  // Ensure the email is verified before allowing booking
+  if (!verifiedEmails.includes(emailNormalized)) {
+    return res.status(403).json({ error: 'Email not verified. Please verify your email before booking.' });
+  }
   const candidates = spaces
     .filter(s => s.type === type)
     .sort((a, b) => a.priorityOrder - b.priorityOrder);
@@ -439,7 +481,7 @@ app.get('/api/bookings/auto', (req, res) => {
         cancelLink = `${APP_BASE_URL}/cancel/${id}`;
       }
       const confirmationMessage =
-        `Your booking for ${space.name} on ${date} from ${startTime} to ${endTime} has been confirmed.` +
+        `Your booking for ${space.name} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
         (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
       sendEmail(
         emailNormalized,
@@ -481,6 +523,85 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
   } else {
     res.status(404).json({ error: 'Admin not found' });
   }
+});
+
+// ----- Email verification routes -----
+
+/**
+ * Request email verification. Accepts a JSON body with an `email` field.
+ * If the email belongs to the company domain and has not already been verified,
+ * a verification token is generated and emailed to the address. The response
+ * always returns OK (to avoid leaking which emails are already verified).
+ */
+app.post('/api/request-verification', (req, res) => {
+  const { email } = req.body || {};
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+  const emailNormalized = String(email).trim().toLowerCase();
+  if (!emailNormalized.endsWith('@fbhi.net')) {
+    return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
+  }
+  // If already verified, return success without sending another email
+  if (verifiedEmails.includes(emailNormalized)) {
+    return res.json({ ok: true, message: 'Email already verified' });
+  }
+  // Generate a unique token and store mapping to email
+  const token = uuidv4();
+  verificationTokens[token] = emailNormalized;
+  // Build verification link
+  let verifyLink = '';
+  if (APP_BASE_URL) {
+    verifyLink = `${APP_BASE_URL}/verify-email/${token}`;
+  } else {
+    // Fallback to relative path (useful when running locally)
+    verifyLink = `/verify-email/${token}`;
+  }
+  const message =
+    `Please verify your email address by clicking the following link:\n\n${verifyLink}\n\n` +
+    `Once verified, you will be able to book spaces on the booking site.`;
+  sendEmail(emailNormalized, 'Email Verification', message);
+  res.json({ ok: true });
+});
+
+/**
+ * Verify an email using a token. When a valid token is accessed, the
+ * corresponding email is added to the verifiedEmails list and persisted.
+ * A simple HTML page is returned that stores the verification status in
+ * localStorage and redirects back to the booking page.
+ */
+app.get('/verify-email/:token', (req, res) => {
+  const { token } = req.params;
+  const email = verificationTokens[token];
+  if (!email) {
+    return res.status(404).send(
+      '<html><head><title>Invalid Token</title></head><body>' +
+      '<h1>Invalid or expired verification token</h1>' +
+      '<p>Please request a new verification link.</p>' +
+      '</body></html>'
+    );
+  }
+  // Add email to verified list if not present
+  if (!verifiedEmails.includes(email)) {
+    verifiedEmails.push(email);
+    saveData();
+  }
+  // Remove the token so it cannot be reused
+  delete verificationTokens[token];
+  // Build HTML response with script to set localStorage and redirect
+  const html =
+    '<!DOCTYPE html><html><head><title>Email Verified</title></head><body>' +
+    '<h1>Email Verified</h1>' +
+    '<p>Your email address has been verified. You may now book a space.</p>' +
+    `<script>
+      try {
+        localStorage.setItem('emailVerified', 'true');
+        localStorage.setItem('verifiedEmail', '${email}');
+      } catch (e) {}
+      window.location.href = '/';
+    </script>` +
+    '</body></html>';
+  res.send(html);
 });
 
 // Start server

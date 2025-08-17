@@ -157,6 +157,18 @@
       await loadAdmins();
     }
 
+    // Convert 24h time to 12h with AM/PM for display
+    function to12Hour(time) {
+      if (typeof time !== 'string' || !time.includes(':')) return time;
+      const [hStr, m] = time.split(':');
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return time;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      if (h === 0) h = 12;
+      return `${h}:${m} ${ampm}`;
+    }
+
     async function loadSpaces() {
       const res = await fetch('/api/spaces');
       const spaces = await res.json();
@@ -202,7 +214,9 @@
       tbody.innerHTML = '';
       bookings.forEach(b => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${b.startTime}</td><td>${b.endTime}</td><td>${b.recurring ? 'Yes' : 'No'}</td>
+        const start12 = to12Hour(b.startTime);
+        const end12 = to12Hour(b.endTime);
+        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${start12}</td><td>${end12}</td><td>${b.recurring ? 'Yes' : 'No'}</td>
           <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
         tbody.appendChild(tr);
       });
