@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Book a Space</title>
+  <title>Kiosk Booking</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { font-family: Arial, sans-serif; background: #f9f9f9; margin: 0; padding: 20px; }
     h1 { text-align: center; color: #333; }
-    .card { background: white; padding: 20px; margin: 0 auto; max-width: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .card { background: white; padding: 20px; margin: 0 auto; max-width: 600px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .field { margin-bottom: 12px; }
     label { display: block; margin-bottom: 4px; color: #555; }
     input[type="text"], input[type="email"], input[type="date"], select {
@@ -15,23 +15,29 @@
     }
     button { background: #007bff; color: white; padding: 10px 16px; border: none; border-radius: 4px; cursor: pointer; }
     button:hover { background: #0056b3; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #fafafa; }
     .status { margin-top: 15px; min-height: 20px; color: #333; }
     .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
-    .link-bar { text-align: center; margin-bottom: 16px; }
-    .link-bar a { margin: 0 8px; color: #007bff; text-decoration: none; }
-    .link-bar a:hover { text-decoration: underline; }
-    /* Styles for availability results */
     .yes { color: #2e7d32; font-weight: bold; }
     .no { color: #c62828; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>Book a Space</h1>
-  <div class="link-bar" style="text-align: right;">
-    <!-- Link to Admin portal on top right -->
-    <a href="admin.html" id="adminLink">Admin Portal</a>
-  </div>
+  <h1>Kiosk Booking and Check-In</h1>
   <div class="card">
+    <h2>Today's Bookings</h2>
+    <table id="todayTable">
+      <thead>
+        <tr><th>Name</th><th>Space</th><th>Start</th><th>End</th><th>Status</th><th>Action</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Book a Space</h2>
     <div class="field">
       <label for="name">Full Name</label>
       <input type="text" id="name" placeholder="Your name">
@@ -60,18 +66,6 @@
     <div class="status" id="status"></div>
   </div>
 
-  <!-- Email verification overlay (hidden by default) -->
-  <div id="verificationOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; z-index:1000;">
-    <div class="card" style="max-width:400px; text-align:center;">
-      <h2>Email Verification Required</h2>
-      <p>Please enter your @fbhi.net email to verify before booking.</p>
-      <input type="email" id="verifyEmail" placeholder="you@fbhi.net" style="width:100%; margin-bottom:8px;">
-      <button id="verifyBtn" type="button">Send Verification Link</button>
-      <div id="verifyStatus" style="margin-top:8px; color:#333;"></div>
-    </div>
-  </div>
-
-  <!-- Availability section -->
   <div class="card" id="availability-section">
     <h2>Check Space Availability</h2>
     <div class="field">
@@ -87,14 +81,14 @@
   </div>
 
   <script>
-    // Populate the list of spaces and auto-booking options
+    // Populate spaces and auto-book options
     async function populateSpaces() {
       try {
         const res = await fetch('/api/spaces');
         const spaces = await res.json();
         const select = document.getElementById('space');
         select.innerHTML = '';
-        // Auto-booking options
+        // Auto-book options
         const autoDesk = document.createElement('option');
         autoDesk.value = 'auto-desk';
         autoDesk.textContent = 'Auto book Desk';
@@ -113,8 +107,24 @@
         console.error(err);
       }
     }
-
-    // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
+    // Populate spaces for availability (no auto options)
+    async function populateAvailSpaces() {
+      try {
+        const res = await fetch('/api/spaces');
+        const data = await res.json();
+        const sel = document.getElementById('avSpace');
+        sel.innerHTML = '';
+        data.forEach(space => {
+          const opt = document.createElement('option');
+          opt.value = space.id;
+          opt.textContent = space.name;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    // Convert 12h time to 24h format
     function convertTo24h(str) {
       if (!str) return '';
       const parts = str.trim().split(' ');
@@ -126,8 +136,18 @@
       if (period === 'AM' && hour === 12) hour = 0;
       return `${hour.toString().padStart(2, '0')}:${minute}`;
     }
-
-    // Create a custom time picker that appears on focus
+    // Convert 24h to 12h for display
+    function to12Hour(time) {
+      if (typeof time !== 'string' || !time.includes(':')) return time;
+      const [hStr, m] = time.split(':');
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return time;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      if (h === 0) h = 12;
+      return `${h}:${m} ${ampm}`;
+    }
+    // Create a time picker
     function createTimePicker(inputId) {
       const input = document.getElementById(inputId);
       const container = document.createElement('div');
@@ -147,14 +167,14 @@
         hourSelect.appendChild(opt);
       }
       const minuteSelect = document.createElement('select');
-      ['00', '15', '30', '45'].forEach(m => {
+      ['00','15','30','45'].forEach(m => {
         const opt = document.createElement('option');
         opt.value = m;
         opt.textContent = m;
         minuteSelect.appendChild(opt);
       });
       const periodSelect = document.createElement('select');
-      ['AM', 'PM'].forEach(p => {
+      ['AM','PM'].forEach(p => {
         const opt = document.createElement('option');
         opt.value = p;
         opt.textContent = p;
@@ -186,8 +206,34 @@
         }
       });
     }
-
-    // Submit the booking form
+    // Load today's bookings and populate table
+    async function loadToday() {
+      try {
+        const res = await fetch('/api/bookings/today');
+        const data = await res.json();
+        const tbody = document.getElementById('todayTable').querySelector('tbody');
+        tbody.innerHTML = '';
+        data.forEach(b => {
+          const tr = document.createElement('tr');
+          const status = b.checkedIn ? 'Checked In' : 'Not Checked In';
+          tr.innerHTML = `<td>${b.name}</td><td>${b.spaceName}</td><td>${to12Hour(b.startTime)}</td><td>${to12Hour(b.endTime)}</td><td>${status}</td>`;
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.textContent = b.checkedIn ? '✓' : 'Check In';
+          btn.disabled = b.checkedIn;
+          btn.addEventListener('click', async () => {
+            await fetch(`/api/bookings/${b.id}/checkin`, { method: 'POST' });
+            loadToday();
+          });
+          actionTd.appendChild(btn);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    // Booking submission
     async function doBook() {
       const name = document.getElementById('name').value.trim();
       const email = document.getElementById('email').value.trim();
@@ -201,9 +247,8 @@
         statusEl.textContent = 'Please fill in all fields.';
         return;
       }
-      // Validate email domain on client side (trim and normalise)
-      const emailNormalized = email.toLowerCase().trim();
-      if (!emailNormalized.endsWith('@fbhi.net')) {
+      const emailNorm = email.toLowerCase().trim();
+      if (!emailNorm.endsWith('@fbhi.net')) {
         statusEl.style.color = 'red';
         statusEl.textContent = 'Email must be a @fbhi.net address.';
         return;
@@ -211,7 +256,6 @@
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
       try {
-        // Client‑side verification is not enforced here; overlay ensures the first visit verification.
         if (spaceVal.startsWith('auto-')) {
           const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
           const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
@@ -220,6 +264,7 @@
             const data = await res.json();
             statusEl.style.color = 'green';
             statusEl.textContent = `Success! Reserved ${data.spaceName} on ${date}.`;
+            loadToday();
           } else {
             const err = await res.json();
             statusEl.style.color = 'red';
@@ -235,6 +280,7 @@
             const data = await res.json();
             statusEl.style.color = 'green';
             statusEl.textContent = `Success! Your booking ID is ${data.id}.`;
+            loadToday();
           } else {
             const err = await res.json();
             statusEl.style.color = 'red';
@@ -247,99 +293,7 @@
         statusEl.textContent = 'An error occurred while booking.';
       }
     }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      populateSpaces();
-      createTimePicker('start-time');
-      createTimePicker('end-time');
-      document.getElementById('book-btn').addEventListener('click', doBook);
-
-      // Availability initialization
-      populateAvailSpaces();
-      document.getElementById('checkBtn').addEventListener('click', checkAvailability);
-
-      // Show verification overlay on first visit if email not verified
-      checkVerificationStatus();
-      document.getElementById('verifyBtn').addEventListener('click', requestVerification);
-
-      // If a verified email is stored, prefill the email field and prevent editing
-      try {
-        const verifiedFlag = localStorage.getItem('emailVerified');
-        const verifiedEmail = localStorage.getItem('verifiedEmail');
-        const emailInput = document.getElementById('email');
-        if (verifiedFlag === 'true' && verifiedEmail) {
-          emailInput.value = verifiedEmail;
-          emailInput.readOnly = true;
-          emailInput.style.background = '#f0f0f0';
-        }
-      } catch (e) {}
-    });
-
-    // Show or hide verification overlay depending on localStorage flag
-    function checkVerificationStatus() {
-      try {
-        const verified = localStorage.getItem('emailVerified');
-        if (verified === 'true') {
-          document.getElementById('verificationOverlay').style.display = 'none';
-        } else {
-          document.getElementById('verificationOverlay').style.display = 'flex';
-        }
-      } catch (e) {
-        document.getElementById('verificationOverlay').style.display = 'flex';
-      }
-    }
-
-    // Send a verification email request
-    async function requestVerification() {
-      const emailInput = document.getElementById('verifyEmail');
-      const statusEl = document.getElementById('verifyStatus');
-      const email = emailInput.value.trim().toLowerCase();
-      statusEl.style.color = '#333';
-      statusEl.textContent = '';
-      if (!email || !email.endsWith('@fbhi.net')) {
-        statusEl.style.color = 'red';
-        statusEl.textContent = 'Please enter a valid @fbhi.net email address.';
-        return;
-      }
-      try {
-        const res = await fetch('/api/request-verification', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email })
-        });
-        if (res.ok) {
-          statusEl.style.color = 'green';
-          statusEl.textContent = 'A verification email has been sent. Please check your inbox.';
-        } else {
-          const err = await res.json().catch(() => ({ error: 'Failed to send verification' }));
-          statusEl.style.color = 'red';
-          statusEl.textContent = err.error || 'Failed to send verification.';
-        }
-      } catch (err) {
-        statusEl.style.color = 'red';
-        statusEl.textContent = 'An error occurred while sending the verification email.';
-      }
-    }
-
-    // Populate spaces for availability check (without auto options)
-    async function populateAvailSpaces() {
-      try {
-        const res = await fetch('/api/spaces');
-        const data = await res.json();
-        const sel = document.getElementById('avSpace');
-        sel.innerHTML = '';
-        data.forEach(space => {
-          const opt = document.createElement('option');
-          opt.value = space.id;
-          opt.textContent = space.name;
-          sel.appendChild(opt);
-        });
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    // Generate time slots in 30 minute increments between 08:00 and 18:00
+    // Generate time slots for availability
     function generateTimeSlots() {
       const slots = [];
       const pad = n => String(n).padStart(2, '0');
@@ -351,20 +305,7 @@
       }
       return slots;
     }
-
-    // Convert 24h time to 12h AM/PM for display
-    function to12Hour(time) {
-      if (typeof time !== 'string' || !time.includes(':')) return time;
-      const [hStr, m] = time.split(':');
-      let h = parseInt(hStr, 10);
-      if (isNaN(h)) return time;
-      const ampm = h >= 12 ? 'PM' : 'AM';
-      h = h % 12;
-      if (h === 0) h = 12;
-      return `${h}:${m} ${ampm}`;
-    }
-
-    // Check space availability and render results
+    // Check availability
     async function checkAvailability() {
       const date = document.getElementById('avDate').value;
       const spaceId = document.getElementById('avSpace').value;
@@ -374,7 +315,7 @@
         resultsDiv.textContent = 'Please select a date and space.';
         return;
       }
-      // Fetch spaces to determine the selected space type
+      // Fetch spaces to determine selected space type
       let spacesList = [];
       try {
         const resSpaces = await fetch('/api/spaces');
@@ -388,7 +329,6 @@
         return;
       }
       const slots = generateTimeSlots();
-      // Query availability for each slot in parallel
       const promises = slots.map(async ({ start, end }) => {
         const params = new URLSearchParams({ date, start, end });
         params.append('type', selected.type);
@@ -398,7 +338,6 @@
         return { start, end, available: isAvail };
       });
       const results = await Promise.all(promises);
-      // Build table output
       const table = document.createElement('table');
       const thead = document.createElement('thead');
       thead.innerHTML = '<tr><th>Time</th><th>Available</th></tr>';
@@ -413,6 +352,15 @@
       table.appendChild(tbody);
       resultsDiv.appendChild(table);
     }
+    document.addEventListener('DOMContentLoaded', () => {
+      populateSpaces();
+      populateAvailSpaces();
+      createTimePicker('start-time');
+      createTimePicker('end-time');
+      document.getElementById('book-btn').addEventListener('click', doBook);
+      document.getElementById('checkBtn').addEventListener('click', checkAvailability);
+      loadToday();
+    });
   </script>
 </body>
 </html>

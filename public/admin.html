@@ -120,6 +120,13 @@
         <tbody></tbody>
       </table>
     </div>
+
+    <!-- Analytics section -->
+    <div class="card">
+      <h2>Analytics</h2>
+      <button id="loadAnalyticsBtn">Load Analytics</button>
+      <div id="analyticsResults" style="margin-top:12px;"></div>
+    </div>
   </div>
 
   <script>
@@ -407,6 +414,36 @@
       });
     }
 
+    // Load analytics data and render a table
+    async function loadAnalytics() {
+      const res = await fetch('/api/analytics', setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to load analytics' }));
+        alert(err.error || 'Failed to load analytics');
+        return;
+      }
+      const data = await res.json();
+      const container = document.getElementById('analyticsResults');
+      container.innerHTML = '';
+      if (!data || data.length === 0) {
+        container.textContent = 'No booking analytics available.';
+        return;
+      }
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Email</th><th>Days</th><th>#Bookings</th><th>Total Hours</th><th>Check‑ins</th><th>No Check‑ins</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        const daysList = row.days && row.days.length ? row.days.join(', ') : '';
+        tr.innerHTML = `<td>${row.email}</td><td>${daysList}</td><td>${row.bookingsCount}</td><td>${row.totalHours}</td><td>${row.checkIns}</td><td>${row.noCheckIns}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
     async function addAdmin() {
       const body = {
         username: document.getElementById('aUser').value.trim(),
@@ -483,17 +520,12 @@
       createTimePicker('bStart');
       createTimePicker('bEnd');
 
-      // Auto-fill the booking email with the verified email and make read-only
-      try {
-        const verifiedFlag = localStorage.getItem('emailVerified');
-        const verifiedEmail = localStorage.getItem('verifiedEmail');
-        if (verifiedFlag === 'true' && verifiedEmail) {
-          const emailInput = document.getElementById('bEmail');
-          emailInput.value = verifiedEmail;
-          emailInput.readOnly = true;
-          emailInput.style.background = '#f0f0f0';
-        }
-      } catch (e) {}
+      // Bind analytics loader
+      const analyticsBtn = document.getElementById('loadAnalyticsBtn');
+      if (analyticsBtn) {
+        analyticsBtn.addEventListener('click', loadAnalytics);
+      }
+
     });
   </script>
 </body>

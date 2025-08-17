@@ -48,6 +48,21 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
   });
 }
 
+// ----- Kiosk access configuration -----
+// Comma-separated list of allowed IP addresses for kiosk mode. If empty,
+// all IPs are allowed. Set via environment variable KIOSK_ALLOWED_IPS.
+const kioskIpList = (process.env.KIOSK_ALLOWED_IPS || '').split(',').map(ip => ip.trim()).filter(Boolean);
+const allowedKioskIps = new Set(kioskIpList);
+function isKioskAllowed(req) {
+  // When no IPs specified, allow all
+  if (allowedKioskIps.size === 0) return true;
+  // Express reports IPv6 addresses with ::ffff: prefix for IPv4
+  const ip = req.ip || req.connection?.remoteAddress || '';
+  // Normalize IPv6 mapped IPv4 addresses
+  const ipNormalized = ip.startsWith('::ffff:') ? ip.substring(7) : ip;
+  return Array.from(allowedKioskIps).some(allowed => ipNormalized === allowed || ipNormalized.endsWith(allowed));
+}
+
 // ----- Data persistence configuration -----
 // Path to the JSON file used to persist data across restarts.
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -99,6 +114,14 @@ function saveData() {
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
+// Restrict access to kiosk page by IP
+app.get('/kiosk.html', (req, res, next) => {
+  if (!isKioskAllowed(req)) {
+    return res.status(403).send('Access denied');
+  }
+  next();
+});
+
 app.use(express.static('public'));
 
 // ----- In‑memory data stores ------------------------------------------------
@@ -349,10 +372,6 @@ app.post('/api/bookings', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
-  // Ensure the email is verified before allowing booking
-  if (!verifiedEmails.includes(emailNormalized)) {
-    return res.status(403).json({ error: 'Email not verified. Please verify your email before booking.' });
-  }
   if (String(spaceId).startsWith('auto-')) {
     return res.status(400).json({ error: 'Use /api/bookings/auto for auto-booking' });
   }
@@ -368,7 +387,7 @@ app.post('/api/bookings', (req, res) => {
     return res.status(400).json({ error: 'Space is not available for the requested time' });
   }
   const id = uuidv4();
-  bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec });
+  bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec, checkedIn: false });
   // Persist changes
   saveData();
   // Build a cancellation link. If APP_BASE_URL is set, use it; otherwise omit the URL.
@@ -465,17 +484,13 @@ app.get('/api/bookings/auto', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
-  // Ensure the email is verified before allowing booking
-  if (!verifiedEmails.includes(emailNormalized)) {
-    return res.status(403).json({ error: 'Email not verified. Please verify your email before booking.' });
-  }
   const candidates = spaces
     .filter(s => s.type === type)
     .sort((a, b) => a.priorityOrder - b.priorityOrder);
   for (const space of candidates) {
     if (isSpaceAvailable(space.id, date, startTime, endTime)) {
       const id = uuidv4();
-      bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false });
+      bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false, checkedIn: false });
       // Persist immediately so that cancellation link works even if the process restarts
       saveData();
       // Construct cancellation link
@@ -526,6 +541,98 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
   } else {
     res.status(404).json({ error: 'Admin not found' });
   }
+});
+
+// ----- Kiosk and analytics routes -----
+
+// Return bookings for the current day (including recurring bookings that occur on the current day).
+// Only accessible from allowed kiosk IPs.
+app.get('/api/bookings/today', (req, res) => {
+  if (!isKioskAllowed(req)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const result = bookings.filter(b => b.date === today || isRecurringOnDate(today, b.recurring)).map(b => {
+    const space = spaces.find(s => s.id === b.spaceId);
+    return {
+      id: b.id,
+      name: b.name,
+      email: b.email,
+      spaceName: space ? space.name : '',
+      date: b.date,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      checkedIn: !!b.checkedIn
+    };
+  });
+  res.json(result);
+});
+
+// Check in a booking by ID. Marks the booking as checkedIn and persists.
+// Only accessible from allowed kiosk IPs.
+app.post('/api/bookings/:id/checkin', (req, res) => {
+  if (!isKioskAllowed(req)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  const { id } = req.params;
+  const booking = bookings.find(b => b.id === id);
+  if (!booking) {
+    return res.status(404).json({ error: 'Booking not found' });
+  }
+  booking.checkedIn = true;
+  saveData();
+  res.json({ ok: true });
+});
+
+// Analytics endpoint. Returns aggregated booking data for office bookings.
+app.get('/api/analytics', adminAuth, (req, res) => {
+  // Filter bookings for office spaces
+  const officeBookings = bookings.filter(b => {
+    const space = spaces.find(s => s.id === b.spaceId);
+    return space && space.type === 'office';
+  });
+  const analyticsMap = {};
+  officeBookings.forEach(b => {
+    const key = b.email;
+    if (!analyticsMap[key]) {
+      analyticsMap[key] = {
+        email: b.email,
+        dates: new Set(),
+        count: 0,
+        totalMinutes: 0,
+        checkIns: 0,
+        noCheckIns: 0
+      };
+    }
+    const entry = analyticsMap[key];
+    entry.count++;
+    // Add date to set of unique dates
+    entry.dates.add(b.date);
+    // Compute duration in minutes
+    const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
+    const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
+    if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
+      const startMinutes = sh * 60 + sm;
+      const endMinutes = eh * 60 + em;
+      let diff = endMinutes - startMinutes;
+      if (diff < 0) diff = 0;
+      entry.totalMinutes += diff;
+    }
+    if (b.checkedIn) entry.checkIns++;
+    else entry.noCheckIns++;
+  });
+  const result = Object.values(analyticsMap).map(e => {
+    return {
+      email: e.email,
+      days: Array.from(e.dates),
+      daysCount: e.dates.size,
+      totalHours: (e.totalMinutes / 60).toFixed(2),
+      bookingsCount: e.count,
+      checkIns: e.checkIns,
+      noCheckIns: e.noCheckIns
+    };
+  });
+  res.json(result);
 });
 
 // ----- Email verification routes -----
