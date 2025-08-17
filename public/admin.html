@@ -124,7 +124,16 @@
     <!-- Analytics section -->
     <div class="card">
       <h2>Analytics</h2>
-      <button id="loadAnalyticsBtn">Load Analytics</button>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <label for="analyticsPeriod">Period:</label>
+        <select id="analyticsPeriod">
+          <option value="month">This Month</option>
+          <option value="quarter">This Quarter</option>
+          <option value="year">This Year</option>
+          <option value="ytd">Year‑to‑date</option>
+        </select>
+        <button id="loadAnalyticsBtn">Load Analytics</button>
+      </div>
       <div id="analyticsResults" style="margin-top:12px;"></div>
     </div>
 
@@ -477,7 +486,15 @@
 
     // Load analytics data and render a table
     async function loadAnalytics() {
-      const res = await fetch('/api/analytics', setAuthHeaders());
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) {
+        url += '?' + params.toString();
+      }
+      const res = await fetch(url, setAuthHeaders());
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed to load analytics' }));
         alert(err.error || 'Failed to load analytics');
@@ -492,13 +509,21 @@
       }
       const table = document.createElement('table');
       const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>Email</th><th>Days</th><th>#Bookings</th><th>Total Hours</th><th>Check‑ins</th><th>No Check‑ins</th></tr>';
+      thead.innerHTML = '<tr><th>Email</th><th>Bookings by Day</th><th>#Bookings</th><th>Check‑in Hours</th><th>No‑show Hours</th><th>Check‑ins</th><th>No Check‑ins</th></tr>';
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
       data.forEach(row => {
         const tr = document.createElement('tr');
-        const daysList = row.days && row.days.length ? row.days.join(', ') : '';
-        tr.innerHTML = `<td>${row.email}</td><td>${daysList}</td><td>${row.bookingsCount}</td><td>${row.totalHours}</td><td>${row.checkIns}</td><td>${row.noCheckIns}</td>`;
+        // Convert dayOfWeekCounts object into a human‑readable string like "Mon: 4, Tue: 2"
+        let daysStr = '';
+        if (row.dayOfWeekCounts) {
+          const parts = [];
+          for (const [day, count] of Object.entries(row.dayOfWeekCounts)) {
+            if (count > 0) parts.push(`${day.slice(0,3)}: ${count}`);
+          }
+          daysStr = parts.join(', ');
+        }
+        tr.innerHTML = `<td>${row.email}</td><td>${daysStr}</td><td>${row.bookingsCount}</td><td>${row.totalCheckInHours}</td><td>${row.totalNoShowHours}</td><td>${row.checkIns}</td><td>${row.noCheckIns}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);

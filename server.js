@@ -6,6 +6,23 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 
+// -----------------------------------------------------------------------------
+// Configuration constants
+//
+// Limit the maximum duration of any single (non‑recurring) booking.  This helps
+// prevent accidental day‑long reservations that block the system for other
+// users.  You can adjust this value as needed.  The value is expressed in
+// hours.
+const MAX_BOOKING_HOURS = 12;
+
+// Directory where backups of the data file will be written.  Each time data
+// is saved, a timestamped copy of the JSON payload will be stored here.  The
+// directory will be created on demand if it does not exist.  Only a small
+// number of recent backups are retained to avoid unbounded growth.  You can
+// adjust BACKUP_RETENTION to keep more or fewer backups.
+const BACKUP_DIR = path.join(__dirname, 'backups');
+const BACKUP_RETENTION = 10;
+
 /*
  * Simple office booking application
  *
@@ -166,8 +183,40 @@ function saveData() {
   };
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
+    // After successfully saving the primary data file, also write a backup
+    // copy with a timestamped filename.  Backups are helpful in case of
+    // unexpected corruption or accidental deletion of the primary JSON file.
+    createBackup(out);
   } catch (err) {
     console.error('Failed to save data:', err);
+  }
+}
+
+/**
+ * Write a timestamped backup of the current data payload.  The backup file
+ * name includes the current date and time down to seconds.  Only the most
+ * recent BACKUP_RETENTION backups are kept on disk; older backups are
+ * automatically removed.
+ *
+ * @param {object} payload The data object to serialise and back up
+ */
+function createBackup(payload) {
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFile = path.join(BACKUP_DIR, `data-${stamp}.json`);
+    fs.writeFileSync(backupFile, JSON.stringify(payload, null, 2));
+    // Enforce retention: remove older backups beyond the retention limit
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith('data-') && f.endsWith('.json'))
+      .sort();
+    // Keep only the newest BACKUP_RETENTION files
+    while (files.length > BACKUP_RETENTION) {
+      const oldest = files.shift();
+      try { fs.unlinkSync(path.join(BACKUP_DIR, oldest)); } catch (_) {}
+    }
+  } catch (err) {
+    console.error('Failed to create backup:', err);
   }
 }
 
@@ -237,23 +286,42 @@ loadData();
 
 // ----- Helper functions ------------------------------------------------------
 
-function sendEmail(to, subject, text) {
-  // If a transporter and from address are configured, attempt to send a real email
+/**
+ * Send an email via nodemailer if configured, otherwise log the message to
+ * the console.  Supports optional attachments, which are passed directly
+ * through to nodemailer.  When attachments are present but no SMTP
+ * transporter is configured, a note is logged indicating that an attachment
+ * would have been sent.
+ *
+ * @param {string} to Recipient email address
+ * @param {string} subject Email subject line
+ * @param {string} text Plain‑text body of the email
+ * @param {Array<object>} [attachments] Optional array of attachment objects
+ */
+function sendEmail(to, subject, text, attachments = []) {
   if (mailTransporter && process.env.MAIL_FROM) {
-    mailTransporter.sendMail({
+    const mailOptions = {
       from: process.env.MAIL_FROM,
       to,
       subject,
-      text
-    }).catch(err => {
+      text,
+      attachments: attachments && attachments.length ? attachments : undefined
+    };
+    mailTransporter.sendMail(mailOptions).catch(err => {
       console.error('Email send error:', err);
     });
   } else {
-    // Fallback to console logging so that notifications are visible during development
+    // No SMTP configured; log to console instead.  Include attachment
+    // information so that developers are aware of the additional content.
     console.log('\n--- EMAIL NOTIFICATION ---');
     console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text);
+    if (attachments && attachments.length) {
+      attachments.forEach(att => {
+        console.log(`[Attachment: ${att.filename || 'file'} (${(att.content || '').length} bytes)]`);
+      });
+    }
     console.log('--------------------------\n');
   }
 }
@@ -339,6 +407,101 @@ function isSpaceAvailable(spaceId, date, startTime, endTime) {
       (startTime <= b.startTime && endTime >= b.endTime);
     return overlaps;
   });
+}
+
+/**
+ * For recurring bookings, check that the requested time slot is available for
+ * each occurrence within the next 12 months.  If any future occurrence
+ * conflicts with an existing booking (regular or recurring), the booking
+ * cannot be created.  For weekly recurrences the check runs until the end
+ * of the 52nd week from the first date.  Monthly patterns are checked
+ * through the same horizon.
+ *
+ * @param {string} spaceId ID of the space
+ * @param {string} firstDate ISO date string of the first occurrence (YYYY‑MM‑DD)
+ * @param {string} startTime 24h time string HH:MM
+ * @param {string} endTime 24h time string HH:MM
+ * @param {object} recurring Recurrence object
+ * @returns {boolean} True if all occurrences are free
+ */
+function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recurring) {
+  // Only check for recurring patterns
+  if (!recurring || typeof recurring !== 'object') return true;
+  const startDateObj = new Date(firstDate);
+  if (isNaN(startDateObj.getTime())) return true;
+  // We'll iterate day by day for up to one year ahead
+  const horizonDate = new Date(startDateObj);
+  horizonDate.setFullYear(horizonDate.getFullYear() + 1);
+  const current = new Date(startDateObj);
+  // Skip the first occurrence; it is already validated by caller
+  current.setDate(current.getDate() + 1);
+  while (current <= horizonDate) {
+    const dateStr = current.toISOString().slice(0, 10);
+    // only consider dates on or after the first date
+    if (isRecurringOnDate(dateStr, recurring)) {
+      if (!isSpaceAvailable(spaceId, dateStr, startTime, endTime)) {
+        return false;
+      }
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  return true;
+}
+
+/**
+ * Generate a basic iCalendar event for a booking.  This function creates
+ * a minimal VCalendar with a single VEvent describing the booking start and
+ * end times.  The event UID is derived from the booking id to ensure
+ * uniqueness.  Optionally a cancellation can be generated by passing
+ * cancelled=true and method="CANCEL"; in this case the VEvent includes
+ * STATUS:CANCELLED.  Times are encoded in local time without a timezone
+ * suffix (floating time).  Clients will interpret the times in their own
+ * timezone.
+ *
+ * @param {object} booking The booking object
+ * @param {string} spaceName Name of the space booked
+ * @param {string} method iCalendar method (REQUEST or CANCEL)
+ * @param {boolean} cancelled Whether the event should include a cancelled status
+ * @returns {string} iCalendar formatted string
+ */
+function generateICS(booking, spaceName, method = 'REQUEST', cancelled = false) {
+  const { id, date, startTime, endTime, name, email } = booking;
+  // Parse date and times into components
+  const [yStr, mStr, dStr] = date.split('-');
+  const [startH, startM] = startTime.split(':').map(n => parseInt(n, 10));
+  const [endH, endM] = endTime.split(':').map(n => parseInt(n, 10));
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  // Build timestamps in format YYYYMMDDTHHMMSS
+  const dtStart = `${yStr}${mStr}${dStr}T${String(startH).padStart(2, '0')}${String(startM).padStart(2, '0')}00`;
+  const dtEnd = `${yStr}${mStr}${dStr}T${String(endH).padStart(2, '0')}${String(endM).padStart(2, '0')}00`;
+  const dtStamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
+  const lines = [];
+  lines.push('BEGIN:VCALENDAR');
+  lines.push('VERSION:2.0');
+  lines.push('PRODID:-//Office Booking//EN');
+  lines.push(`METHOD:${method}`);
+  lines.push('BEGIN:VEVENT');
+  lines.push(`UID:${id}@booking`);
+  lines.push(`DTSTAMP:${dtStamp}`);
+  lines.push(`DTSTART:${dtStart}`);
+  lines.push(`DTEND:${dtEnd}`);
+  lines.push(`SUMMARY:Booking for ${spaceName}`);
+  lines.push(`LOCATION:${spaceName}`);
+  if (name && email) {
+    // RFC5545 requires escaping commas and semicolons in CN
+    const cn = String(name).replace(/[,;]/g, '\\$&');
+    lines.push(`ORGANIZER;CN=${cn}:MAILTO:${email}`);
+  }
+  lines.push(`DESCRIPTION:Office booking for ${spaceName}`);
+  if (cancelled) {
+    lines.push('STATUS:CANCELLED');
+    lines.push('SEQUENCE:1');
+  }
+  lines.push('END:VEVENT');
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
 }
 
 function adminAuth(req, res, next) {
@@ -446,12 +609,33 @@ app.post('/api/bookings', (req, res) => {
   if (!space) {
     return res.status(404).json({ error: 'Space not found' });
   }
+  // Enforce maximum booking duration for single and recurring bookings
+  const [sh, sm] = startTime.split(':').map(x => parseInt(x, 10));
+  const [eh, em] = endTime.split(':').map(x => parseInt(x, 10));
+  if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
+    let startMinutes = sh * 60 + sm;
+    let endMinutes = eh * 60 + em;
+    if (endMinutes < startMinutes) {
+      // Treat overnight bookings as invalid for simplicity
+      return res.status(400).json({ error: 'End time must be after start time' });
+    }
+    const diffMin = endMinutes - startMinutes;
+    if (diffMin > MAX_BOOKING_HOURS * 60) {
+      return res.status(400).json({ error: `Bookings cannot exceed ${MAX_BOOKING_HOURS} hours` });
+    }
+  }
   // Check availability for the first occurrence of a recurring booking or single booking
   const rec = recurring && typeof recurring === 'object' ? recurring : false;
   // If recurring, the provided date is the first occurrence. We still need
   // to ensure that date/time is free.
   if (!isSpaceAvailable(spaceId, date, startTime, endTime)) {
     return res.status(400).json({ error: 'Space is not available for the requested time' });
+  }
+  // For recurring bookings check that future occurrences within one year do not
+  // conflict with existing bookings.  If a conflict is detected the booking
+  // cannot be created.
+  if (rec && !checkRecurringAvailability(spaceId, date, startTime, endTime, rec)) {
+    return res.status(400).json({ error: 'Recurring booking conflicts with an existing booking in a future period' });
   }
   const id = uuidv4();
   bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec, checkedIn: false });
@@ -462,13 +646,23 @@ app.post('/api/bookings', (req, res) => {
   if (APP_BASE_URL) {
     cancelLink = `${APP_BASE_URL}/cancel/${id}`;
   }
+  // Create plain text confirmation message
   const confirmationMessage =
     `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
     (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
+  // Generate an iCalendar attachment for the booking (first occurrence only)
+  let attachments = [];
+  try {
+    const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
+    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
+  } catch (err) {
+    console.error('Failed to generate iCalendar attachment:', err);
+  }
   sendEmail(
     emailNormalized,
     'Booking Confirmation',
-    confirmationMessage
+    confirmationMessage,
+    attachments
   );
   res.json({ id });
 });
@@ -480,10 +674,25 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
     const space = spaces.find(s => s.id === removed.spaceId);
+    // Build cancellation email and iCalendar cancel attachment
+    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
+    let attachments = [];
+    try {
+      const icsCancel = generateICS(
+        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
+        space ? space.name : 'a space',
+        'CANCEL',
+        true
+      );
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
+    } catch (err) {
+      console.error('Failed to generate cancellation iCalendar attachment:', err);
+    }
     sendEmail(
       removed.email,
       'Booking Cancelled',
-      `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`
+      cancelMsg,
+      attachments
     );
     // Persist changes
     saveData();
@@ -503,9 +712,21 @@ app.get('/cancel/:id', (req, res) => {
     const [removed] = bookings.splice(index, 1);
     saveData();
     const space = spaces.find(s => s.id === removed.spaceId);
-    // Send cancellation email to the user
+    // Send cancellation email to the user with iCalendar cancel attachment
     const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
-    sendEmail(removed.email, 'Booking Cancelled', cancelMsg);
+    let attachments = [];
+    try {
+      const icsCancel = generateICS(
+        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
+        space ? space.name : 'a space',
+        'CANCEL',
+        true
+      );
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
+    } catch (err) {
+      console.error('Failed to generate cancellation iCalendar attachment:', err);
+    }
+    sendEmail(removed.email, 'Booking Cancelled', cancelMsg, attachments);
     res.send(
       '<html><head><title>Booking Cancelled</title></head><body>' +
       '<h1>Booking Cancelled</h1>' +
@@ -568,10 +789,18 @@ app.get('/api/bookings/auto', (req, res) => {
       const confirmationMessage =
         `Your booking for ${space.name} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
         (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
+      let attachments = [];
+      try {
+        const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
+        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
+      } catch (err) {
+        console.error('Failed to generate iCalendar attachment:', err);
+      }
       sendEmail(
         emailNormalized,
         'Booking Confirmation',
-        confirmationMessage
+        confirmationMessage,
+        attachments
       );
       return res.json({ id, spaceName: space.name });
     }
@@ -651,50 +880,138 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
   res.json({ ok: true });
 });
 
-// Analytics endpoint. Returns aggregated booking data for office bookings.
+// Analytics endpoint. Returns aggregated booking data for office spaces.
+// Supports filtering by time range via query parameters.  Use `period`
+// query parameter to select a predefined range: `month`, `quarter`, `year`,
+// or `ytd`.  Alternatively specify custom start and end dates using
+// `start` and `end` in YYYY‑MM‑DD format.  The response groups results by
+// user email and includes counts of bookings by day of the week as well as
+// total hours spent checked in vs not checked in.
 app.get('/api/analytics', adminAuth, (req, res) => {
-  // Filter bookings for office spaces
+  // Determine date range from query parameters
+  const { period, start, end } = req.query;
+  let startDate;
+  let endDate;
+  const now = new Date();
+  if (start && end) {
+    // Custom range
+    const s = new Date(start);
+    const e = new Date(end);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+      startDate = s;
+      // Add 23h59m to end date to include entire day
+      endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    }
+  }
+  if (!startDate || !endDate) {
+    // Predefined ranges relative to today
+    const year = now.getFullYear();
+    switch ((period || '').toLowerCase()) {
+      case 'quarter': {
+        const quarter = Math.floor(now.getMonth() / 3);
+        const qStartMonth = quarter * 3;
+        startDate = new Date(year, qStartMonth, 1);
+        endDate = new Date(year, qStartMonth + 3, 0, 23, 59, 59);
+        break;
+      }
+      case 'year': {
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31, 23, 59, 59);
+        break;
+      }
+      case 'ytd': {
+        startDate = new Date(year, 0, 1);
+        endDate = now;
+        break;
+      }
+      case 'month':
+      default: {
+        // Default to current month
+        startDate = new Date(year, now.getMonth(), 1);
+        endDate = new Date(year, now.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      }
+    }
+  }
+  // Filter bookings to include only those whose space is an office
   const officeBookings = bookings.filter(b => {
     const space = spaces.find(s => s.id === b.spaceId);
     return space && space.type === 'office';
   });
+  // Prepare analytics map keyed by user email
   const analyticsMap = {};
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   officeBookings.forEach(b => {
-    const key = b.email;
-    if (!analyticsMap[key]) {
-      analyticsMap[key] = {
-        email: b.email,
-        dates: new Set(),
-        count: 0,
-        totalMinutes: 0,
+    const email = b.email;
+    if (!analyticsMap[email]) {
+      analyticsMap[email] = {
+        email,
+        dayOfWeekCounts: { Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0 },
+        bookingsCount: 0,
+        totalMinutesCheckIn: 0,
+        totalMinutesNoCheckIn: 0,
         checkIns: 0,
         noCheckIns: 0
       };
     }
-    const entry = analyticsMap[key];
-    entry.count++;
-    // Add date to set of unique dates
-    entry.dates.add(b.date);
-    // Compute duration in minutes
-    const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
-    const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
-    if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
-      const startMinutes = sh * 60 + sm;
-      const endMinutes = eh * 60 + em;
-      let diff = endMinutes - startMinutes;
-      if (diff < 0) diff = 0;
-      entry.totalMinutes += diff;
+    const entry = analyticsMap[email];
+    // Helper to process a single occurrence
+    function processOccurrence(dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return;
+      // Check if within range (inclusive)
+      if (d < startDate || d > endDate) return;
+      const dow = d.getDay();
+      const dayName = dayNames[dow];
+      entry.dayOfWeekCounts[dayName] = (entry.dayOfWeekCounts[dayName] || 0) + 1;
+      entry.bookingsCount++;
+      // Compute duration
+      const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
+      const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
+      if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
+        let startMinutes = sh * 60 + sm;
+        let endMinutes = eh * 60 + em;
+        let diff = endMinutes - startMinutes;
+        if (diff < 0) diff = 0;
+        if (b.checkedIn) {
+          entry.totalMinutesCheckIn += diff;
+        } else {
+          entry.totalMinutesNoCheckIn += diff;
+        }
+      }
+      if (b.checkedIn) entry.checkIns++;
+      else entry.noCheckIns++;
     }
-    if (b.checkedIn) entry.checkIns++;
-    else entry.noCheckIns++;
+    // For recurring bookings, iterate through occurrences within range
+    if (b.recurring && typeof b.recurring === 'object') {
+      // Start at either booking.date or startDate, whichever is later
+      const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
+      const endIter = new Date(endDate);
+      // Normalise to midnight
+      startIter.setHours(0,0,0,0);
+      endIter.setHours(0,0,0,0);
+      const currentDate = new Date(startIter);
+      while (currentDate <= endIter) {
+        const dateStr = currentDate.toISOString().slice(0, 10);
+        // Only consider dates on or after the first booking date
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+          processOccurrence(dateStr);
+        }
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+    } else {
+      // Single booking: process if within range
+      processOccurrence(b.date);
+    }
   });
+  // Convert map to an array and format totals as hours
   const result = Object.values(analyticsMap).map(e => {
     return {
       email: e.email,
-      days: Array.from(e.dates),
-      daysCount: e.dates.size,
-      totalHours: (e.totalMinutes / 60).toFixed(2),
-      bookingsCount: e.count,
+      dayOfWeekCounts: e.dayOfWeekCounts,
+      bookingsCount: e.bookingsCount,
+      totalCheckInHours: (e.totalMinutesCheckIn / 60).toFixed(2),
+      totalNoShowHours: (e.totalMinutesNoCheckIn / 60).toFixed(2),
       checkIns: e.checkIns,
       noCheckIns: e.noCheckIns
     };
