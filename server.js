@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 
 // -----------------------------------------------------------------------------
 // Configuration constants
@@ -15,12 +16,19 @@ const nodemailer = require('nodemailer');
 // hours.
 const MAX_BOOKING_HOURS = 12;
 
+// Data directory can be overridden via environment variables.  By default
+// persistence uses the application directory.  When deploying on Render with
+// a mounted disk, set DATA_DIR (and optionally BACKUP_DIR) to the mount
+// location (e.g. /data) to ensure persistence across deploys.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
 // Directory where backups of the data file will be written.  Each time data
 // is saved, a timestamped copy of the JSON payload will be stored here.  The
 // directory will be created on demand if it does not exist.  Only a small
 // number of recent backups are retained to avoid unbounded growth.  You can
-// adjust BACKUP_RETENTION to keep more or fewer backups.
-const BACKUP_DIR = path.join(__dirname, 'backups');
+// adjust BACKUP_RETENTION to keep more or fewer backups.  Use BACKUP_DIR
+// environment variable to override the default.
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
 const BACKUP_RETENTION = 10;
 
 /*
@@ -137,8 +145,8 @@ function isKioskSession(req) {
 }
 
 // ----- Data persistence configuration -----
-// Path to the JSON file used to persist data across restarts.
-const DATA_FILE = path.join(__dirname, 'data.json');
+// The DATA_FILE constant is defined near the top of this file, derived from
+// DATA_DIR.  It specifies where persistent data will be stored.
 
 /**
  * Load persisted spaces, bookings and admins from disk. If the file does not
@@ -258,11 +266,21 @@ const spaces = [
 //   recurrence patterns.
 const bookings = [];
 
-// Admin accounts used to access the admin portal. Passwords are in plain text
-// purely for demonstration purposes. In a real application you should never
-// store passwords in plain text.
+// Admin accounts used to access the admin portal.  The first admin is
+// designated as the owner and uses a hashed password.  Additional admins
+// created via the API will also store hashed credentials.  Note: legacy
+// installations that store plain passwords will continue to work but new
+// passwords are always hashed.
+const initialAdminPassword = 'admin123';
+const _initCred = hashPassword(initialAdminPassword);
 const admins = [
-  { id: uuidv4(), username: 'admin@example.com', password: 'admin123' }
+  {
+    id: uuidv4(),
+    username: 'admin@example.com',
+    passwordHash: _initCred.hash,
+    salt: _initCred.salt,
+    role: 'owner'
+  }
 ];
 
 // Logged‑in admin tokens map token -> adminId
@@ -285,6 +303,49 @@ const verificationTokens = {};
 loadData();
 
 // ----- Helper functions ------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Security helpers
+//
+// Define the available admin roles.  Owners have full privileges, admins can
+// perform most actions except managing other admins, analysts can view
+// analytics but not modify data, and frontdesk users have limited booking
+// capabilities (e.g. check-in).  You can adjust this list as needed.
+const ROLES = ['owner', 'admin', 'analyst', 'frontdesk'];
+
+/**
+ * Hash a plain text password using PBKDF2 with a random salt.  Returns an
+ * object containing the salt and derived key in hexadecimal format.  Using
+ * PBKDF2 avoids the need to install external dependencies like bcrypt.
+ *
+ * @param {string} password The plain text password
+ * @returns {{ salt: string, hash: string }}
+ */
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512').toString('hex');
+  return { salt, hash };
+}
+
+/**
+ * Verify a plain text password against a stored admin record.  If the admin
+ * has both a passwordHash and salt, PBKDF2 is used for comparison.  If
+ * passwordHash is missing, falls back to comparing plain password fields
+ * (legacy support).  Returns true if the password matches.
+ *
+ * @param {string} password The plain text password
+ * @param {object} admin Admin record with either passwordHash/salt or password
+ * @returns {boolean}
+ */
+function verifyPassword(password, admin) {
+  if (!admin) return false;
+  if (admin.passwordHash && admin.salt) {
+    const hash = crypto.pbkdf2Sync(password, admin.salt, 100000, 64, 'sha512').toString('hex');
+    return hash === admin.passwordHash;
+  }
+  // Legacy plain text fallback
+  return admin.password === password;
+}
 
 /**
  * Send an email via nodemailer if configured, otherwise log the message to
@@ -510,10 +571,14 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const token = authHeader.split(' ')[1];
-  if (!tokens[token]) {
+  const adminId = tokens[token];
+  if (!adminId) {
     return res.status(401).json({ error: 'Invalid token' });
   }
-  req.adminId = tokens[token];
+  req.adminId = adminId;
+  const admin = admins.find(a => a.id === adminId);
+  req.admin = admin;
+  req.adminRole = admin && admin.role ? admin.role : 'admin';
   next();
 }
 
@@ -522,9 +587,18 @@ function adminAuth(req, res, next) {
 // Admin login
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
-  const admin = admins.find(a => a.username === username && a.password === password);
-  if (!admin) {
+  const admin = admins.find(a => a.username === username);
+  // If admin found, verify password using hashed or plain comparison
+  if (!admin || !verifyPassword(password, admin)) {
     return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  // If admin has plain password but no hash, upgrade to hashed credentials
+  if (!admin.passwordHash || !admin.salt) {
+    const creds = hashPassword(password);
+    admin.passwordHash = creds.hash;
+    admin.salt = creds.salt;
+    delete admin.password;
+    saveData();
   }
   const token = uuidv4();
   tokens[token] = admin.id;
@@ -537,6 +611,10 @@ app.get('/api/spaces', (req, res) => {
 });
 
 app.post('/api/spaces', adminAuth, (req, res) => {
+  // Only owners and admins can add spaces
+  if (!['owner', 'admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { name, type, priorityOrder } = req.body;
   if (!name || !type || priorityOrder === undefined) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -549,6 +627,10 @@ app.post('/api/spaces', adminAuth, (req, res) => {
 });
 
 app.delete('/api/spaces/:id', adminAuth, (req, res) => {
+  // Only owners and admins can delete spaces
+  if (!['owner', 'admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { id } = req.params;
   const index = spaces.findIndex(r => r.id === id);
   if (index >= 0) {
@@ -562,6 +644,10 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 
 // Bookings endpoints
 app.get('/api/bookings', adminAuth, (req, res) => {
+  // Only owners and admins can list all bookings
+  if (!['owner','admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const result = bookings.map(b => {
     const space = spaces.find(s => s.id === b.spaceId);
     return {
@@ -669,6 +755,10 @@ app.post('/api/bookings', (req, res) => {
 
 // Cancel a booking by ID (admin only)
 app.delete('/api/bookings/:id', adminAuth, (req, res) => {
+  // Only owners and admins can delete bookings
+  if (!['owner','admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { id } = req.params;
   const index = bookings.findIndex(b => b.id === id);
   if (index >= 0) {
@@ -810,27 +900,54 @@ app.get('/api/bookings/auto', (req, res) => {
 
 // Admin user management
 app.get('/api/admins', adminAuth, (req, res) => {
-  res.json(admins.map(a => ({ id: a.id, username: a.username })));
+  // Only owners and admins can list admin users
+  if (!['owner','admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  res.json(admins.map(a => ({ id: a.id, username: a.username, role: a.role || 'admin' })));
 });
 
 app.post('/api/admins', adminAuth, (req, res) => {
-  const { username, password } = req.body;
+  // Only owners can add new admins
+  if (req.adminRole !== 'owner') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { username, password, role } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Missing username or password' });
+  }
+  const roleNormalized = (role && typeof role === 'string') ? role.toLowerCase() : 'admin';
+  if (!ROLES.includes(roleNormalized) || roleNormalized === 'owner') {
+    // Prevent creation of new owners via API
+    return res.status(400).json({ error: 'Invalid role' });
   }
   if (admins.find(a => a.username === username)) {
     return res.status(400).json({ error: 'Admin already exists' });
   }
+  const creds = hashPassword(password);
   const id = uuidv4();
-  admins.push({ id, username, password });
+  admins.push({ id, username, passwordHash: creds.hash, salt: creds.salt, role: roleNormalized });
   saveData();
   res.json({ id });
 });
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
+  // Only owners can delete admins
+  if (req.adminRole !== 'owner') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { id } = req.params;
   const index = admins.findIndex(a => a.id === id);
   if (index >= 0) {
+    // Prevent removal of the last owner
+    const adminToRemove = admins[index];
+    if (adminToRemove.role === 'owner') {
+      // Count number of owners
+      const ownerCount = admins.reduce((acc, a) => acc + (a.role === 'owner' ? 1 : 0), 0);
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the only owner' });
+      }
+    }
     admins.splice(index, 1);
     saveData();
     res.json({ ok: true });
@@ -888,6 +1005,10 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
 // user email and includes counts of bookings by day of the week as well as
 // total hours spent checked in vs not checked in.
 app.get('/api/analytics', adminAuth, (req, res) => {
+  // Only owners, admins and analysts can access analytics
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   // Determine date range from query parameters
   const { period, start, end } = req.query;
   let startDate;
@@ -1019,6 +1140,271 @@ app.get('/api/analytics', adminAuth, (req, res) => {
   res.json(result);
 });
 
+// -----------------------------------------------------------------------------
+// Analytics summary endpoint.  Returns aggregated metrics across all office
+// bookings for the selected period.  Includes monthly booking counts,
+// monthly check‑in hours, monthly no‑show hours and overall utilisation
+// percentage (booked hours vs total available hours for all offices).
+app.get('/api/analytics-summary', adminAuth, (req, res) => {
+  // Only owners, admins and analysts can access summary
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { period, start, end } = req.query;
+  // Determine date range using same logic as analytics endpoint
+  let startDate;
+  let endDate;
+  const now = new Date();
+  if (start && end) {
+    const s = new Date(start);
+    const e = new Date(end);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+      startDate = s;
+      endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    }
+  }
+  if (!startDate || !endDate) {
+    const year = now.getFullYear();
+    switch ((period || '').toLowerCase()) {
+      case 'quarter': {
+        const quarter = Math.floor(now.getMonth() / 3);
+        const qStartMonth = quarter * 3;
+        startDate = new Date(year, qStartMonth, 1);
+        endDate = new Date(year, qStartMonth + 3, 0, 23, 59, 59);
+        break;
+      }
+      case 'year': {
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31, 23, 59, 59);
+        break;
+      }
+      case 'ytd': {
+        startDate = new Date(year, 0, 1);
+        endDate = now;
+        break;
+      }
+      case 'month':
+      default: {
+        startDate = new Date(year, now.getMonth(), 1);
+        endDate = new Date(year, now.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      }
+    }
+  }
+  // Utility to format month key as YYYY-MM
+  function monthKey(dateObj) {
+    const y = dateObj.getFullYear();
+    const m = (dateObj.getMonth() + 1).toString().padStart(2, '0');
+    return `${y}-${m}`;
+  }
+  // Initialise accumulators
+  const monthlyBookings = {};
+  const monthlyCheckInMinutes = {};
+  const monthlyNoShowMinutes = {};
+  let totalBookedMinutes = 0;
+  // Filter office bookings
+  const officeBookings = bookings.filter(b => {
+    const space = spaces.find(s => s.id === b.spaceId);
+    return space && space.type === 'office';
+  });
+  // Iterate bookings and occurrences
+  officeBookings.forEach(b => {
+    function processOccurrence(dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return;
+      if (d < startDate || d > endDate) return;
+      const key = monthKey(d);
+      // Compute minutes for the occurrence
+      const [sh, sm] = b.startTime.split(':').map(n => parseInt(n,10));
+      const [eh, em] = b.endTime.split(':').map(n => parseInt(n,10));
+      if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return;
+      let diff = (eh * 60 + em) - (sh * 60 + sm);
+      if (diff < 0) diff = 0;
+      // Accumulate bookings count
+      monthlyBookings[key] = (monthlyBookings[key] || 0) + 1;
+      if (b.checkedIn) {
+        monthlyCheckInMinutes[key] = (monthlyCheckInMinutes[key] || 0) + diff;
+      } else {
+        monthlyNoShowMinutes[key] = (monthlyNoShowMinutes[key] || 0) + diff;
+      }
+      totalBookedMinutes += diff;
+    }
+    if (b.recurring && typeof b.recurring === 'object') {
+      const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
+      const endIter = new Date(endDate);
+      startIter.setHours(0,0,0,0);
+      endIter.setHours(0,0,0,0);
+      const currentDate = new Date(startIter);
+      while (currentDate <= endIter) {
+        const dateStr = currentDate.toISOString().slice(0,10);
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+          processOccurrence(dateStr);
+        }
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+    } else {
+      processOccurrence(b.date);
+    }
+  });
+  // Convert minutes to hours with 2 decimals
+  const monthlyCheckInHours = {};
+  Object.keys(monthlyCheckInMinutes).forEach(k => {
+    monthlyCheckInHours[k] = (monthlyCheckInMinutes[k] / 60).toFixed(2);
+  });
+  const monthlyNoShowHours = {};
+  Object.keys(monthlyNoShowMinutes).forEach(k => {
+    monthlyNoShowHours[k] = (monthlyNoShowMinutes[k] / 60).toFixed(2);
+  });
+  // Compute utilisation percentage
+  // Available minutes = number of office spaces * number of days * 24 * 60
+  const officeCount = spaces.reduce((acc, s) => acc + (s.type === 'office' ? 1 : 0), 0);
+  const startDay = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const endDay = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+  const millisPerDay = 24 * 60 * 60 * 1000;
+  const dayCount = Math.floor((endDay - startDay) / millisPerDay) + 1;
+  const totalAvailableMinutes = officeCount * dayCount * 24 * 60;
+  const utilisation = totalAvailableMinutes > 0 ? ((totalBookedMinutes / totalAvailableMinutes) * 100).toFixed(2) : '0.00';
+  res.json({ monthlyBookings, monthlyCheckInHours, monthlyNoShowHours, utilisation });
+});
+
+// -----------------------------------------------------------------------------
+// Analytics export endpoint.  Generates a CSV file of the per‑user analytics
+// data for the specified period.  Columns include email, booking counts by
+// day of week (Sun–Sat), total bookings count, check‑in hours, no‑show
+// hours, check‑in count and no‑check‑in count.  Returned as a text/csv
+// attachment.
+app.get('/api/analytics-export', adminAuth, (req, res) => {
+  // Only owners, admins and analysts can export analytics
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const { period, start, end } = req.query;
+  // Compute date range similar to analytics endpoint
+  let startDate;
+  let endDate;
+  const now = new Date();
+  if (start && end) {
+    const s = new Date(start);
+    const e = new Date(end);
+    if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
+      startDate = s;
+      endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    }
+  }
+  if (!startDate || !endDate) {
+    const year = now.getFullYear();
+    switch ((period || '').toLowerCase()) {
+      case 'quarter': {
+        const quarter = Math.floor(now.getMonth() / 3);
+        const qStartMonth = quarter * 3;
+        startDate = new Date(year, qStartMonth, 1);
+        endDate = new Date(year, qStartMonth + 3, 0, 23, 59, 59);
+        break;
+      }
+      case 'year': {
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31, 23, 59, 59);
+        break;
+      }
+      case 'ytd': {
+        startDate = new Date(year, 0, 1);
+        endDate = now;
+        break;
+      }
+      case 'month':
+      default: {
+        startDate = new Date(year, now.getMonth(), 1);
+        endDate = new Date(year, now.getMonth() + 1, 0, 23, 59, 59);
+        break;
+      }
+    }
+  }
+  // Compute analytics per user for offices
+  const analyticsMap = {};
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const officeBookings = bookings.filter(b => {
+    const space = spaces.find(s => s.id === b.spaceId);
+    return space && space.type === 'office';
+  });
+  officeBookings.forEach(b => {
+    const email = b.email;
+    if (!analyticsMap[email]) {
+      analyticsMap[email] = {
+        email,
+        dayCounts: { Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0 },
+        bookingsCount: 0,
+        totalMinutesCheckIn: 0,
+        totalMinutesNoCheckIn: 0,
+        checkIns: 0,
+        noCheckIns: 0
+      };
+    }
+    const entry = analyticsMap[email];
+    function processOccurrence(dateStr) {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime()) || d < startDate || d > endDate) return;
+      const dow = d.getDay();
+      entry.dayCounts[dayNames[dow]]++;
+      entry.bookingsCount++;
+      const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
+      const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
+      if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
+        let diff = (eh * 60 + em) - (sh * 60 + sm);
+        if (diff < 0) diff = 0;
+        if (b.checkedIn) entry.totalMinutesCheckIn += diff;
+        else entry.totalMinutesNoCheckIn += diff;
+      }
+      if (b.checkedIn) entry.checkIns++;
+      else entry.noCheckIns++;
+    }
+    if (b.recurring && typeof b.recurring === 'object') {
+      const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
+      const endIter = new Date(endDate);
+      startIter.setHours(0,0,0,0);
+      endIter.setHours(0,0,0,0);
+      const currentDate = new Date(startIter);
+      while (currentDate <= endIter) {
+        const dateStr = currentDate.toISOString().slice(0, 10);
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+          processOccurrence(dateStr);
+        }
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
+    } else {
+      processOccurrence(b.date);
+    }
+  });
+  // Build CSV
+  const headers = ['Email','Sun','Mon','Tue','Wed','Thu','Fri','Sat','Bookings','CheckInHours','NoShowHours','CheckIns','NoCheckIns'];
+  const rows = [headers.join(',')];
+  Object.values(analyticsMap).forEach(e => {
+    const row = [
+      e.email,
+      e.dayCounts['Sunday'],
+      e.dayCounts['Monday'],
+      e.dayCounts['Tuesday'],
+      e.dayCounts['Wednesday'],
+      e.dayCounts['Thursday'],
+      e.dayCounts['Friday'],
+      e.dayCounts['Saturday'],
+      e.bookingsCount,
+      (e.totalMinutesCheckIn / 60).toFixed(2),
+      (e.totalMinutesNoCheckIn / 60).toFixed(2),
+      e.checkIns,
+      e.noCheckIns
+    ];
+    const escaped = row.map(field => {
+      const s = String(field);
+      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+    });
+    rows.push(escaped.join(','));
+  });
+  const csv = rows.join('\r\n');
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="analytics.csv"');
+  res.send(csv);
+});
+
 // ----- Kiosk token management API -----
 
 // List all kiosk registration tokens (admin only). Returns the array of
@@ -1026,6 +1412,9 @@ app.get('/api/analytics', adminAuth, (req, res) => {
 // devices and codes. Because codes effectively authenticate kiosk
 // devices, they should be treated as secrets and only visible to admins.
 app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
+  if (!['owner', 'admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   res.json(kioskTokens);
 });
 
@@ -1034,6 +1423,9 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // the kiosk device, while the code is shared with the device during
 // setup. The token remains valid until explicitly revoked by an admin.
 app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
+  if (!['owner', 'admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const id = uuidv4();
   const code = generateKioskCode();
   kioskTokens.push({ id, code });
@@ -1046,6 +1438,9 @@ app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
 // does not remove the cookie from the client; instead the server simply
 // stops recognising the token.
 app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
+  if (!['owner', 'admin'].includes(req.adminRole)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
   const { id } = req.params;
   const index = kioskTokens.findIndex(t => t.id === id);
   if (index < 0) {

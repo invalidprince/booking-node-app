@@ -111,11 +111,17 @@
       <div class="row">
         <input id="aUser" placeholder="username (email)">
         <input id="aPass" placeholder="password">
+        <!-- Role selection for new admin users -->
+        <select id="aRole">
+          <option value="admin" selected>Admin</option>
+          <option value="analyst">Analyst</option>
+          <option value="frontdesk">FrontDesk</option>
+        </select>
         <button id="addAdminBtn">Add Admin</button>
       </div>
       <table id="adminsTable">
         <thead>
-          <tr><th>Username</th><th>Action</th></tr>
+          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -133,8 +139,11 @@
           <option value="ytd">Year‑to‑date</option>
         </select>
         <button id="loadAnalyticsBtn">Load Analytics</button>
+        <button id="loadSummaryBtn">Load Summary</button>
+        <button id="downloadCsvBtn">Download CSV</button>
       </div>
       <div id="analyticsResults" style="margin-top:12px;"></div>
+      <div id="summaryResults" style="margin-top:12px;"></div>
     </div>
 
     <!-- Kiosk management section -->
@@ -434,7 +443,9 @@
       tbody.innerHTML = '';
       admins.forEach(a => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${a.username}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
+        // Show username and role (defaulting to 'admin' if missing)
+        const role = a.role || 'admin';
+        tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
         tbody.appendChild(tr);
       });
     }
@@ -530,14 +541,99 @@
       container.appendChild(table);
     }
 
+    // Load summary analytics (aggregated across all users) and render a simple view
+    async function loadSummary() {
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics-summary';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) url += '?' + params.toString();
+      const res = await fetch(url, setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to load summary' }));
+        alert(err.error || 'Failed to load summary');
+        return;
+      }
+      const data = await res.json();
+      const container = document.getElementById('summaryResults');
+      container.innerHTML = '';
+      if (!data) {
+        container.textContent = 'No summary available.';
+        return;
+      }
+      // Build a table with monthly metrics and utilisation
+      const { monthlyBookings, monthlyCheckInHours, monthlyNoShowHours, utilisation } = data;
+      const keys = Array.from(new Set([
+        ...Object.keys(monthlyBookings || {}),
+        ...Object.keys(monthlyCheckInHours || {}),
+        ...Object.keys(monthlyNoShowHours || {})
+      ])).sort();
+      if (keys.length === 0) {
+        container.textContent = 'No summary available.';
+        return;
+      }
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Month</th><th>#Bookings</th><th>Check‑in Hours</th><th>No‑show Hours</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      keys.forEach(k => {
+        const tr = document.createElement('tr');
+        const bookings = monthlyBookings && monthlyBookings[k] ? monthlyBookings[k] : 0;
+        const checkIn = monthlyCheckInHours && monthlyCheckInHours[k] ? monthlyCheckInHours[k] : '0.00';
+        const noShow = monthlyNoShowHours && monthlyNoShowHours[k] ? monthlyNoShowHours[k] : '0.00';
+        tr.innerHTML = `<td>${k}</td><td>${bookings}</td><td>${checkIn}</td><td>${noShow}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+      // Display utilisation below the table
+      const utilDiv = document.createElement('div');
+      utilDiv.style.marginTop = '8px';
+      utilDiv.textContent = `Utilisation: ${utilisation}%`;
+      container.appendChild(utilDiv);
+    }
+
+    // Download the analytics CSV file for the selected period
+    async function downloadCsv() {
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics-export';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) url += '?' + params.toString();
+      const res = await fetch(url, setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to download CSV' }));
+        alert(err.error || 'Failed to download CSV');
+        return;
+      }
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'analytics.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
     async function addAdmin() {
-      const body = {
-        username: document.getElementById('aUser').value.trim(),
-        password: document.getElementById('aPass').value.trim()
-      };
+      const username = document.getElementById('aUser').value.trim();
+      const password = document.getElementById('aPass').value.trim();
+      const role = document.getElementById('aRole') ? document.getElementById('aRole').value : 'admin';
+      const body = { username, password, role };
       const res = await fetch('/api/admins', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
       if (res.ok) {
+        // Clear inputs and reload list
+        document.getElementById('aUser').value = '';
+        document.getElementById('aPass').value = '';
+        if (document.getElementById('aRole')) document.getElementById('aRole').value = 'admin';
         await loadAdmins();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed to add admin' }));
+        alert(err.error || 'Failed to add admin');
       }
     }
 
@@ -610,6 +706,18 @@
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
       if (analyticsBtn) {
         analyticsBtn.addEventListener('click', loadAnalytics);
+      }
+
+      // Bind summary loader
+      const summaryBtn = document.getElementById('loadSummaryBtn');
+      if (summaryBtn) {
+        summaryBtn.addEventListener('click', loadSummary);
+      }
+
+      // Bind CSV downloader
+      const csvBtn = document.getElementById('downloadCsvBtn');
+      if (csvBtn) {
+        csvBtn.addEventListener('click', downloadCsv);
       }
 
       // Bind kiosk management actions
