@@ -73,11 +73,28 @@ async function initDb() {
   if (!DATABASE_URL || !Pool) {
     return;
   }
-  db = new Pool({ connectionString: DATABASE_URL });
-  // Create tables if they do not already exist.  Use JSONB for the recurring
-  // column to store arbitrary recurrence objects.  Note that the bookings
-  // table includes optional checkInTime, checkOutTime and cancelled fields
-  // added in later iterations of the app.
+  // Attempt to connect to the external database.  If the connection fails
+  // (e.g. network unreachable or authentication error) fall back to the
+  // JSON‑based persistence by setting `db` to null.  The `pg` module will
+  // automatically resolve DNS and may prefer IPv6.  Provide an SSL option
+  // with a relaxed certificate check for hosted providers like Supabase.
+  try {
+    db = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    });
+    // Probe the connection to verify the host is reachable.  A simple
+    // SELECT eliminates silent failures when the pool is lazily initialised.
+    await db.query('SELECT 1');
+  } catch (err) {
+    console.error('Failed to connect to database; falling back to file‑based storage:', err);
+    db = null;
+    return;
+  }
+  // Create tables if they do not already exist.  Use JSONB for the
+  // recurring column to store arbitrary recurrence objects.  Note that the
+  // bookings table includes optional checkInTime, checkOutTime and
+  // cancelled fields added in later iterations of the app.
   const createStatements = [
     `CREATE TABLE IF NOT EXISTS spaces (
       id UUID PRIMARY KEY,
