@@ -6,6 +6,18 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+// Conditionally import pg.  When running locally without the pg package
+// installed we catch the error and leave Pool undefined.  The database
+// functionality is only used when DATABASE_URL is provided and pg is
+// available.  This allows the application to run in environments without
+// network access (e.g. during development/testing) and still use the
+// JSON-based persistence.
+let Pool;
+try {
+  ({ Pool } = require('pg'));
+} catch (_) {
+  Pool = null;
+}
 
 // -----------------------------------------------------------------------------
 // Configuration constants
@@ -30,6 +42,81 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 // environment variable to override the default.
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
 const BACKUP_RETENTION = 10;
+
+// -----------------------------------------------------------------------------
+// Database configuration
+//
+// When a DATABASE_URL environment variable is provided the application will
+// persist all state into an external Postgres database.  This allows data to
+// survive across deployments and can be shared between multiple running
+// instances.  If no DATABASE_URL is defined the application will fall back to
+// the original JSON based persistence on the local filesystem.
+
+const DATABASE_URL = process.env.DATABASE_URL || null;
+
+// A pg Pool instance used when DATABASE_URL is defined.  Created on demand in
+// initDb().  When DATABASE_URL is not set this remains null and all database
+// operations are skipped.
+let db = null;
+
+/**
+ * Initialise the Postgres database.  When DATABASE_URL is defined this
+ * function will create a connection pool and ensure all required tables exist.
+ * The schema is deliberately simple and mirrors the in‑memory arrays used by
+ * the application.  If no DATABASE_URL is provided this function resolves
+ * immediately without performing any actions.
+ */
+async function initDb() {
+  // Bail out if no DATABASE_URL or the pg module is not available.  This
+  // preserves the original file‑based persistence when pg is missing or no
+  // connection string is provided.
+  if (!DATABASE_URL || !Pool) {
+    return;
+  }
+  db = new Pool({ connectionString: DATABASE_URL });
+  // Create tables if they do not already exist.  Use JSONB for the recurring
+  // column to store arbitrary recurrence objects.  Note that the bookings
+  // table includes optional checkInTime, checkOutTime and cancelled fields
+  // added in later iterations of the app.
+  const createStatements = [
+    `CREATE TABLE IF NOT EXISTS spaces (
+      id UUID PRIMARY KEY,
+      name TEXT,
+      type TEXT,
+      "priorityOrder" INTEGER
+    );`,
+    `CREATE TABLE IF NOT EXISTS bookings (
+      id UUID PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      "spaceId" UUID,
+      date TEXT,
+      "startTime" TEXT,
+      "endTime" TEXT,
+      recurring JSONB,
+      "checkInTime" TEXT,
+      "checkOutTime" TEXT,
+      cancelled BOOLEAN
+    );`,
+    `CREATE TABLE IF NOT EXISTS admins (
+      id UUID PRIMARY KEY,
+      username TEXT UNIQUE,
+      "passwordHash" TEXT,
+      salt TEXT,
+      role TEXT
+    );`,
+    `CREATE TABLE IF NOT EXISTS "verifiedEmails" (
+      email TEXT PRIMARY KEY
+    );`,
+    `CREATE TABLE IF NOT EXISTS "kioskTokens" (
+      id UUID PRIMARY KEY,
+      code TEXT
+    );`
+  ];
+  for (const stmt of createStatements) {
+    await db.query(stmt);
+  }
+}
 
 /*
  * Simple office booking application
@@ -152,7 +239,97 @@ function isKioskSession(req) {
  * Load persisted spaces, bookings and admins from disk. If the file does not
  * exist or cannot be parsed, the in-memory defaults remain unchanged.
  */
-function loadData() {
+async function loadData() {
+  // When a database is configured pull state from the DB.  Otherwise fall
+  // back to loading from the JSON file on disk.  In both cases the in‑memory
+  // arrays will be populated with fresh objects.
+  if (db) {
+    try {
+      // Fetch spaces
+      const sRes = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
+      spaces.splice(0, spaces.length, ...sRes.rows);
+      // Fetch bookings
+      const bRes = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
+      bookings.splice(0, bookings.length, ...bRes.rows.map(row => {
+        // The recurring column is stored as JSON in the DB.  When null it
+        // should be represented as false in our in‑memory structure for
+        // consistency with the original JSON schema.
+        return {
+          id: row.id,
+          name: row.name,
+          email: row.email,
+          spaceId: row.spaceId,
+          date: row.date,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          recurring: row.recurring || false,
+          checkInTime: row.checkInTime || null,
+          checkOutTime: row.checkOutTime || null,
+          cancelled: !!row.cancelled
+        };
+      }));
+      // Fetch admins
+      const aRes = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
+      admins.splice(0, admins.length, ...aRes.rows.map(row => {
+        return {
+          id: row.id,
+          username: row.username,
+          passwordHash: row.passwordHash,
+          salt: row.salt,
+          role: row.role
+        };
+      }));
+      // Fetch verified emails
+      const vRes = await db.query('SELECT email FROM "verifiedEmails"');
+      verifiedEmails.splice(0, verifiedEmails.length, ...vRes.rows.map(row => row.email));
+      // Fetch kiosk tokens
+      const kRes = await db.query('SELECT id, code FROM "kioskTokens"');
+      kioskTokens.splice(0, kioskTokens.length, ...kRes.rows.map(row => ({ id: row.id, code: row.code })));
+      // If no data is present in the database (initial launch) attempt to load
+      // from the JSON file and persist it to the database.  This allows
+      // seamless migration of existing data.json into the new Postgres
+      // persistence layer.  If any of the in‑memory arrays remain empty
+      // after this block they will simply start empty.
+      const isAllEmpty =
+        spaces.length === 0 &&
+        bookings.length === 0 &&
+        admins.length === 0 &&
+        verifiedEmails.length === 0 &&
+        kioskTokens.length === 0;
+      if (isAllEmpty) {
+        try {
+          const raw = fs.readFileSync(DATA_FILE, 'utf8');
+          const data = JSON.parse(raw);
+          if (Array.isArray(data.spaces) && data.spaces.length) {
+            spaces.splice(0, spaces.length, ...data.spaces);
+          }
+          if (Array.isArray(data.bookings) && data.bookings.length) {
+            bookings.splice(0, bookings.length, ...data.bookings);
+          }
+          if (Array.isArray(data.admins) && data.admins.length) {
+            admins.splice(0, admins.length, ...data.admins);
+          }
+          if (Array.isArray(data.verifiedEmails) && data.verifiedEmails.length) {
+            verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
+          }
+          if (Array.isArray(data.kioskTokens) && data.kioskTokens.length) {
+            kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
+          }
+          // Persist loaded data into the database so that subsequent restarts
+          // will read from the DB.  Intentionally do not await so that the
+          // server can start serving requests while the import is running.
+          saveData().catch(() => {});
+        } catch (err) {
+          // No JSON file found or parse error; nothing to migrate
+        }
+      }
+      return;
+    } catch (err) {
+      console.error('Failed to load data from database:', err);
+      // In case of an error fall through to file-based loading
+    }
+  }
+  // Fallback: load from JSON file if present
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const data = JSON.parse(raw);
@@ -181,7 +358,7 @@ function loadData() {
  * Persist the current spaces, bookings and admins to disk. Tokens are not
  * persisted because they are only valid for the lifetime of the process.
  */
-function saveData() {
+async function saveData() {
   const out = {
     spaces,
     bookings,
@@ -189,14 +366,74 @@ function saveData() {
     verifiedEmails,
     kioskTokens
   };
+  // Persist to JSON file regardless of DB presence.  This provides a local
+  // backup and maintains compatibility with environments that do not use
+  // Postgres.  Failures here are logged but do not prevent execution.
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
-    // After successfully saving the primary data file, also write a backup
-    // copy with a timestamped filename.  Backups are helpful in case of
-    // unexpected corruption or accidental deletion of the primary JSON file.
     createBackup(out);
   } catch (err) {
-    console.error('Failed to save data:', err);
+    console.error('Failed to save data to JSON file:', err);
+  }
+  // Persist to database if configured.  Use a transaction to ensure that
+  // deletes and inserts succeed together.  On failure the transaction is
+  // rolled back leaving the previous data intact.  Because this function may
+  // be invoked frequently we perform simple wholesale deletes followed by
+  // inserts; this is acceptable given the small scale of the application.
+  if (db) {
+    try {
+      await db.query('BEGIN');
+      // Clear all tables
+      await db.query('DELETE FROM spaces');
+      await db.query('DELETE FROM bookings');
+      await db.query('DELETE FROM admins');
+      await db.query('DELETE FROM "verifiedEmails"');
+      await db.query('DELETE FROM "kioskTokens"');
+      // Insert spaces
+      for (const s of spaces) {
+        await db.query('INSERT INTO spaces (id, name, type, "priorityOrder") VALUES ($1, $2, $3, $4)', [s.id, s.name, s.type, s.priorityOrder]);
+      }
+      // Insert bookings
+      for (const b of bookings) {
+        await db.query(
+          'INSERT INTO bookings (id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+          [
+            b.id,
+            b.name,
+            b.email,
+            b.spaceId,
+            b.date,
+            b.startTime,
+            b.endTime,
+            b.recurring && typeof b.recurring === 'object' ? b.recurring : null,
+            b.checkInTime || null,
+            b.checkOutTime || null,
+            b.cancelled || false
+          ]
+        );
+      }
+      // Insert admins
+      for (const a of admins) {
+        await db.query(
+          'INSERT INTO admins (id, username, "passwordHash", salt, role) VALUES ($1,$2,$3,$4,$5)',
+          [a.id, a.username, a.passwordHash || a.password, a.salt || null, a.role]
+        );
+      }
+      // Insert verified emails
+      for (const email of verifiedEmails) {
+        await db.query('INSERT INTO "verifiedEmails" (email) VALUES ($1)', [email]);
+      }
+      // Insert kiosk tokens
+      for (const kt of kioskTokens) {
+        await db.query('INSERT INTO "kioskTokens" (id, code) VALUES ($1, $2)', [kt.id, kt.code]);
+      }
+      await db.query('COMMIT');
+    } catch (err) {
+      console.error('Failed to save data to database:', err);
+      try {
+        await db.query('ROLLBACK');
+      } catch (_) {}
+    }
   }
 }
 
@@ -298,9 +535,7 @@ const verificationTokens = {};
 // Kiosk access configuration section for definitions of kioskTokens and
 // kioskSessions.
 
-// Load persisted data from disk (if any). This will overwrite the default
-// values defined above if a data file exists.
-loadData();
+// Note: data is loaded asynchronously in the server bootstrapping routine
 
 // ----- Helper functions ------------------------------------------------------
 
@@ -360,9 +595,12 @@ function verifyPassword(password, admin) {
  * @param {Array<object>} [attachments] Optional array of attachment objects
  */
 function sendEmail(to, subject, text, attachments = []) {
-  if (mailTransporter && process.env.MAIL_FROM) {
+  // Determine the configured From address.  We support both MAIL_FROM and
+  // SMTP_FROM for backwards compatibility.  The first defined value wins.
+  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
+  if (mailTransporter && fromAddr) {
     const mailOptions = {
-      from: process.env.MAIL_FROM,
+      from: fromAddr,
       to,
       subject,
       text,
@@ -583,6 +821,91 @@ function adminAuth(req, res, next) {
 }
 
 // ----- API routes -----------------------------------------------------------
+
+/**
+ * Send day‑before reminder emails for tomorrow's bookings.
+ *
+ * This helper function enumerates all bookings scheduled for the next
+ * calendar day and dispatches a reminder email to the booking contact.
+ * Recurring bookings are evaluated using isRecurringOnDate() so that
+ * reminders are sent for each applicable occurrence.  Cancelled bookings
+ * are skipped.  The reminder includes the booking details and a
+ * cancellation link if APP_BASE_URL is configured.  iCalendar attachments
+ * are not included in reminders.
+ */
+async function sendDayBeforeReminders() {
+  // Determine tomorrow's date in local time.  We use a date constructed
+  // from the current time components to avoid timezone drift when
+  // converting to ISO strings.  Note: this code runs in the server's
+  // timezone (set via environment or container) so schedule your cron
+  // accordingly if you need a specific timezone.
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const dateStr = tomorrow.toISOString().split('T')[0];
+  // Iterate over bookings and send reminders for those that occur tomorrow
+  for (const b of bookings) {
+    // Skip cancelled bookings (undefined treated as false)
+    if (b.cancelled) continue;
+    // Does this booking occur on tomorrow's date?  For recurring bookings
+    // check the recurrence rule.
+    const occurs = b.date === dateStr || isRecurringOnDate(dateStr, b.recurring);
+    if (!occurs) continue;
+    // Look up the space name
+    const space = spaces.find(s => s.id === b.spaceId);
+    const spaceName = space ? space.name : 'a space';
+    // Build cancellation link if configured
+    let cancelLink = '';
+    if (APP_BASE_URL) {
+      cancelLink = `${APP_BASE_URL}/cancel/${b.id}`;
+    }
+    const messageLines = [];
+    messageLines.push(`This is a reminder for your upcoming booking.`);
+    messageLines.push(``);
+    messageLines.push(`Space: ${spaceName}`);
+    messageLines.push(`Date: ${dateStr}`);
+    messageLines.push(`Time: ${to12Hour(b.startTime)} – ${to12Hour(b.endTime)}`);
+    if (cancelLink) {
+      messageLines.push('');
+      messageLines.push(`If you need to cancel, please visit the following link:`);
+      messageLines.push(cancelLink);
+    }
+    const message = messageLines.join('\n');
+    try {
+      // Use the booking's stored email; normalise to lower case for consistency
+      const toEmail = String(b.email || '').trim().toLowerCase();
+      if (!toEmail) continue;
+      sendEmail(toEmail, 'Upcoming Booking Reminder', message, []);
+    } catch (err) {
+      console.error('Failed to send reminder email:', err);
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Reminder endpoint
+//
+// A protected endpoint used by automated tasks (e.g. Render Cron Jobs) to
+// trigger the day‑before reminder emails.  To prevent unauthorised
+// invocation, set the REMINDER_TOKEN environment variable to a secret string
+// and pass it as the `token` query parameter.  If no REMINDER_TOKEN is
+// defined, the endpoint will run without authentication.
+app.get('/api/reminders/daily', (req, res) => {
+  const secret = process.env.REMINDER_TOKEN || process.env.REMINDER_SECRET;
+  if (secret) {
+    const provided = req.query.token;
+    if (!provided || provided !== secret) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+  sendDayBeforeReminders()
+    .then(() => {
+      res.json({ ok: true });
+    })
+    .catch(err => {
+      console.error('Error running reminders:', err);
+      res.status(500).json({ error: 'Failed to send reminders' });
+    });
+});
 
 // Admin login
 app.post('/api/login', (req, res) => {
@@ -1553,7 +1876,18 @@ app.get('/verify-email/:token', (req, res) => {
   res.send(html);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Booking app listening at http://localhost:${PORT}`);
-});
+// Start server after initialising the database and loading data.  Because
+// database operations are asynchronous we perform them in an immediately
+// invoked async function.  If any of the setup steps fail the error is
+// logged and the server will still start with the in‑memory defaults.
+(async () => {
+  try {
+    await initDb();
+    await loadData();
+  } catch (err) {
+    console.error('Initialisation error:', err);
+  }
+  app.listen(PORT, () => {
+    console.log(`Booking app listening at http://localhost:${PORT}`);
+  });
+})();
