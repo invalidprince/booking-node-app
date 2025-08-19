@@ -616,29 +616,12 @@ function sendEmail(to, subject, text, attachments = []) {
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
   const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
   if (mailTransporter && fromAddr) {
-    // If an ICS attachment is present, also expose it via nodemailer's
-    // `icalEvent` field so mail clients (Outlook/Apple/Google) treat it
-    // as a meeting invite even when rendering pipelines differ.
-    let icalEvent = undefined;
-    let finalAttachments = undefined;
-    if (attachments && attachments.length) {
-      finalAttachments = attachments;
-      const ics = attachments.find(a => a && String(a.contentType || '').toLowerCase().includes('text/calendar'));
-      if (ics && ics.content) {
-        // Try to extract METHOD from the ICS body; default to REQUEST
-        let method = 'REQUEST';
-        const m = String(ics.content).match(/METHOD:([A-Z]+)/);
-        if (m && m[1]) method = m[1];
-        icalEvent = { method, content: ics.content };
-      }
-    }
     const mailOptions = {
       from: fromAddr,
       to,
       subject,
       text,
-      attachments: finalAttachments,
-      icalEvent
+      attachments: attachments && attachments.length ? attachments : undefined
     };
     mailTransporter.sendMail(mailOptions).catch(err => {
       console.error('Email send error:', err);
@@ -646,7 +629,7 @@ function sendEmail(to, subject, text, attachments = []) {
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
-    console.log('\\n--- EMAIL NOTIFICATION ---');
+    console.log('\n--- EMAIL NOTIFICATION ---');
     console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text);
@@ -655,6 +638,7 @@ function sendEmail(to, subject, text, attachments = []) {
         console.log(`[Attachment: ${att.filename || 'file'} (${(att.content || '').length} bytes)]`);
       });
     }
+    console.log('--------------------------\n');
   }
 }
 
@@ -842,13 +826,6 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   const token = authHeader.split(' ')[1];
-  // Optional break-glass: if ADMIN_TOKEN matches, treat as owner
-  if (process.env.ADMIN_TOKEN && token === process.env.ADMIN_TOKEN) {
-    req.adminId = 'env-admin';
-    req.admin = { id: 'env-admin', username: 'env-admin', role: 'owner' };
-    req.adminRole = 'owner';
-    return next();
-  }
   const adminId = tokens[token];
   if (!adminId) {
     return res.status(401).json({ error: 'Invalid token' });
@@ -914,18 +891,7 @@ async function sendDayBeforeReminders() {
       // Use the booking's stored email; normalise to lower case for consistency
       const toEmail = String(b.email || '').trim().toLowerCase();
       if (!toEmail) continue;
-      (function(){
-        // Attach ICS for the specific occurrence
-        const icsContent = generateICS(
-          { id: b.id, date: dateStr, startTime: b.startTime, endTime: b.endTime, name: b.name, email: toEmail },
-          spaceName,
-          'REQUEST',
-          false
-        );
-        sendEmail(toEmail, 'Upcoming Booking Reminder', message, [
-          { filename: 'booking.ics', content: icsContent, contentType: 'text/calendar; method=REQUEST; charset=UTF-8' }
-        ]);
-      })();
+      sendEmail(toEmail, 'Upcoming Booking Reminder', message, []);
     } catch (err) {
       console.error('Failed to send reminder email:', err);
     }
@@ -1019,7 +985,7 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 // Bookings endpoints
 app.get('/api/bookings', adminAuth, (req, res) => {
   // Only owners and admins can list all bookings
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const result = bookings.map(b => {
@@ -1033,13 +999,76 @@ app.get('/api/bookings', adminAuth, (req, res) => {
       date: b.date,
       startTime: b.startTime,
       endTime: b.endTime,
-      // boolean flag for legacy clients
       recurring: !!b.recurring,
-      // include the full recurrence object for front‑end formatting
-      recurrence: b.recurring || null
+      recurrence: b.recurring || null,
+      checkedIn: !!b.checkedIn
     };
   });
-  res.json(result);
+
+  // Optional filters & pagination
+  const hasQueryControls = (
+    typeof req.query.upcoming !== 'undefined' ||
+    typeof req.query.from !== 'undefined' ||
+    typeof req.query.sort !== 'undefined' ||
+    typeof req.query.limit !== 'undefined' ||
+    typeof req.query.offset !== 'undefined' ||
+    typeof req.query.page !== 'undefined' ||
+    typeof req.query.pageSize !== 'undefined'
+  );
+
+  if (!hasQueryControls) {
+    // Back-compat: return the full array exactly as before
+    return res.json(result);
+  }
+
+  // Parse query params
+  const q = req.query;
+  const sortDir = (q.sort || 'asc').toString().toLowerCase() === 'desc' ? 'desc' : 'asc';
+  let items = result.slice();
+
+  // Apply "upcoming" filter (from now onwards)
+  if (typeof q.upcoming !== 'undefined') {
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0,10);
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    const cur = `${hh}:${mm}`;
+    items = items.filter(b => {
+      if (b.date > todayStr) return true;
+      if (b.date === todayStr && (b.endTime || '00:00') >= cur) return true;
+      // If a booking is recurring but started in the past, it's ambiguous whether to include;
+      // keep it out by default to avoid flooding the list with base patterns.
+      return false;
+    });
+  }
+
+  // Apply "from" filter if provided, expects YYYY-MM-DD
+  if (q.from) {
+    const fromStr = q.from.toString();
+    items = items.filter(b => b.date >= fromStr);
+  }
+
+  // Sort by date then startTime
+  items.sort((a,b) => {
+    const k1 = a.date.localeCompare(b.date);
+    if (k1 !== 0) return sortDir === 'asc' ? k1 : -k1;
+    const k2 = (a.startTime||'00:00').localeCompare(b.startTime||'00:00');
+    return sortDir === 'asc' ? k2 : -k2;
+  });
+
+  // Pagination
+  const pageSize = q.pageSize ? Math.max(1, parseInt(q.pageSize,10)) : (q.limit ? Math.max(1, parseInt(q.limit,10)) : 100);
+  const page = q.page ? Math.max(1, parseInt(q.page,10)) : null;
+  let offset = 0;
+  if (page) {
+    offset = (page - 1) * pageSize;
+  } else if (q.offset) {
+    offset = Math.max(0, parseInt(q.offset,10));
+  }
+  const total = items.length;
+  const sliced = items.slice(offset, offset + pageSize);
+
+  return res.json({ items: sliced, total, offset, page: page || null, pageSize });
 });
 
 /**
@@ -1130,7 +1159,7 @@ app.post('/api/bookings', (req, res) => {
 // Cancel a booking by ID (admin only)
 app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   // Only owners and admins can delete bookings
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -1275,7 +1304,7 @@ app.get('/api/bookings/auto', (req, res) => {
 // Admin user management
 app.get('/api/admins', adminAuth, (req, res) => {
   // Only owners and admins can list admin users
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(admins.map(a => ({ id: a.id, username: a.username, role: a.role || 'admin' })));
@@ -1283,7 +1312,7 @@ app.get('/api/admins', adminAuth, (req, res) => {
 
 app.post('/api/admins', adminAuth, (req, res) => {
   // Only owners can add new admins
-  if (req.adminRole !== 'owner') {
+  if ((!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { username, password, role } = req.body;
@@ -1307,7 +1336,7 @@ app.post('/api/admins', adminAuth, (req, res) => {
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
   // Only owners can delete admins
-  if (req.adminRole !== 'owner') {
+  if ((!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;

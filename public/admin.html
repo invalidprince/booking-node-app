@@ -97,6 +97,14 @@
           <option value="6">Saturday</option>
         </select>
       </div>
+      <div class="row" style="justify-content: space-between; align-items: center; margin: 8px 0;">
+        <div><strong>Bookings (upcoming)</strong></div>
+        <div>
+          <button id="prevPageBtn">&lt; Prev</button>
+          <span id="pageInfo" style="margin:0 8px;"></span>
+          <button id="nextPageBtn">Next &gt;</button>
+        </div>
+      </div>
       <table id="bookingsTable">
         <thead>
           <tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Recurring</th><th>Action</th></tr>
@@ -373,54 +381,60 @@
     }
 
     async function loadBookings() {
-      const res = await fetch('/api/bookings', setAuthHeaders());
-      const bookings = await res.json();
-      const tbody = document.querySelector('#bookingsTable tbody');
-      tbody.innerHTML = '';
-      bookings.forEach(b => {
-        const tr = document.createElement('tr');
-        const start12 = to12Hour(b.startTime);
-        const end12 = to12Hour(b.endTime);
-        const dateFormatted = formatDateWithDay(b.date);
-        const recurrenceDesc = formatRecurrence(b.recurrence);
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12}</td><td>${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
-          <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
-        tbody.appendChild(tr);
-      });
+      if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+      const { offset, limit } = window._pageState;
+      fetch(`/api/bookings?upcoming=1&sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
+        .then(r => r.json())
+        .then(data => {
+          const items = Array.isArray(data) ? data : (data.items || []);
+          const total = Array.isArray(data) ? items.length : (data.total || items.length);
+          window._pageState.total = total;
+
+          const tbody = document.querySelector('#bookingsTable tbody');
+          tbody.innerHTML = '';
+          items.forEach(b => {
+            const tr = document.createElement('tr');
+            const start12 = to12Hour(b.startTime);
+            const end12 = to12Hour(b.endTime);
+            const dateFormatted = formatDateWithDay(b.date);
+            const recurrenceDesc = formatRecurrence(b.recurrence);
+            tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12} - ${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
+              <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
+            tbody.appendChild(tr);
+          });
+
+          // Update page info
+          const start = total === 0 ? 0 : (offset + 1);
+          const end = Math.min(offset + items.length, total);
+          document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
+
+          // Enable/disable buttons
+          document.getElementById('prevPageBtn').disabled = offset === 0;
+          document.getElementById('nextPageBtn').disabled = end >= total;
+        });
     }
 
-    async function addBooking() {
-      const rawStart = document.getElementById('bStart').value;
-      const rawEnd = document.getElementById('bEnd').value;
-      const body = {
-        name: document.getElementById('bName').value.trim(),
-        email: document.getElementById('bEmail').value.trim(),
-        date: document.getElementById('bDate').value,
-        // Convert 12h input values to 24h for API submission
-        startTime: convertTo24h(rawStart),
-        endTime: convertTo24h(rawEnd),
-        spaceId: document.getElementById('bSpace').value
-      };
-      // Determine recurrence object
-      const recType = document.getElementById('bRecurrenceType').value;
-      let recurring = false;
-      if (recType === 'day') {
-        const day = document.getElementById('bRecurrenceDay').value;
-        if (day) {
-          recurring = { frequency: 'monthly', dayOfMonth: parseInt(day, 10) };
-        }
-      } else if (recType === 'weekday') {
-        const nth = document.getElementById('bRecurrenceNth').value;
-        const weekday = document.getElementById('bRecurrenceWeekday').value;
-        if (nth && weekday) {
-          recurring = { frequency: 'monthly', nth: parseInt(nth, 10), weekday: parseInt(weekday, 10) };
-        }
-      } else if (recType === 'weekly') {
-        const weekday = document.getElementById('bRecurrenceWeekday').value;
-        if (weekday) {
-          recurring = { frequency: 'weekly', weekday: parseInt(weekday, 10) };
-        }
+    // Hook up pagination buttons after DOM is ready
+    document.addEventListener('DOMContentLoaded', () => {
+      const prevBtn = document.getElementById('prevPageBtn');
+      const nextBtn = document.getElementById('nextPageBtn');
+      if (prevBtn && nextBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          ps.offset = Math.max(0, ps.offset - ps.limit);
+          loadBookings();
+        });
+        nextBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          if (ps.offset + ps.limit < ps.total) {
+            ps.offset = ps.offset + ps.limit;
+            loadBookings();
+          }
+        });
       }
+    });
       body.recurring = recurring;
       const res = await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
