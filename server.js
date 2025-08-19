@@ -599,6 +599,58 @@ function verifyPassword(password, admin) {
   return admin.password === password;
 }
 
+// === TEMPORARY BOOTSTRAP ADMIN ROUTE (DELETE AFTER USE) ===
+const { v4: uuidv4 } = require('uuid'); // if already imported, remove this line
+
+app.post('/api/bootstrap-admin', async (req, res) => {
+  try {
+    const { token, username, password, role = 'admin' } = req.body || {};
+
+    // Require a bootstrap token so this isn't a public backdoor
+    if (!process.env.BOOTSTRAP_TOKEN || token !== process.env.BOOTSTRAP_TOKEN) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+
+    if (!username || !password) {
+      return res.status(400).json({ ok: false, error: 'username and password required' });
+    }
+
+    // Use the SAME hashing code your app uses
+    const { hash, salt } = hashPassword(password);
+
+    // Insert/upsert into Postgres
+    // If you already have a DB helper, use it; otherwise raw query:
+    const id = (global.crypto?.randomUUID?.() || uuidv4());
+    const text = `
+      INSERT INTO admins (id, username, "passwordHash", salt, role)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (username) DO UPDATE
+        SET "passwordHash" = EXCLUDED."passwordHash",
+            salt = EXCLUDED.salt,
+            role = EXCLUDED.role
+      RETURNING id, username, role;
+    `;
+    const values = [id, username, hash, salt, role];
+
+    // If you already have a pooled client (e.g., db.query), use it:
+    const result = await pool.query(text, values);
+
+    // Also refresh in‑memory cache if your app keeps admins in RAM
+    if (Array.isArray(admins)) {
+      const i = admins.findIndex(a => a.username === username);
+      const adminRow = { id: result.rows[0].id, username, passwordHash: hash, salt, role };
+      if (i >= 0) admins[i] = adminRow; else admins.push(adminRow);
+    }
+
+    return res.json({ ok: true, admin: result.rows[0] });
+  } catch (err) {
+    console.error('bootstrap-admin error', err);
+    return res.status(500).json({ ok: false, error: 'internal-error' });
+  }
+});
+// === END TEMPORARY ROUTE ===
+
+
 /**
  * Send an email via nodemailer if configured, otherwise log the message to
  * the console.  Supports optional attachments, which are passed directly
