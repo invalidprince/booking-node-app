@@ -211,7 +211,14 @@
         // Always attempt to parse the JSON response; if parsing fails
         // return an empty object so that optional chaining below does not
         // throw.
-        const data = await res.json().catch(() => ({}));
+        // Attempt to parse the JSON response.  Use a cloned response so that
+        // the original body remains readable in case we need the raw text.
+        let data = {};
+        try {
+          data = await res.clone().json();
+        } catch (_) {
+          // Swallow JSON parse errors – data will remain an empty object.
+        }
         if (res.ok && data && data.token) {
           // Persist the returned token to localStorage for subsequent requests.
           token = data.token;
@@ -222,10 +229,16 @@
           // Refresh all data in the admin UI.
           await refreshAll();
         } else {
-          // When the response is not OK or no token is returned, display an
-          // appropriate error message.  Fallback to a generic message if
-          // the server did not provide one.
-          status.textContent = (data && data.error) || 'Login failed';
+          // When the response is not OK or no token is returned, display a more
+          // specific error message based on status.  Fallback to the server
+          // error message or a generic message if none provided.
+          if (res.status === 401) {
+            status.textContent = data.error || 'Invalid credentials';
+          } else if (res.status === 403) {
+            status.textContent = data.error || 'Access forbidden';
+          } else {
+            status.textContent = (data && data.error) || `Login failed (HTTP ${res.status})`;
+          }
         }
       } catch (e) {
         console.error('Login error', e);
