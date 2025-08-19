@@ -166,38 +166,23 @@ const APP_BASE_URL = process.env.APP_BASE_URL || '';
 // If not provided, sendEmail will fall back to console logging.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-  
-mailTransporter = nodemailer.createTransport({
+  mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
-    // For 587 + STARTTLS use secure:false; for 465 (implicit TLS) use secure:true.
-    // Also allow SMTP_SECURE to override, and support SMTP_ENCRYPTION=STARTTLS/SSL.
-    secure: (function() {
-      if (typeof process.env.SMTP_SECURE !== 'undefined') {
-        return String(process.env.SMTP_SECURE).toLowerCase() === 'true';
-      }
-      const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
-      if (enc === 'starttls') return false;
-      if (enc === 'ssl' || enc === 'tls') return true;
-      const port = Number(process.env.SMTP_PORT || 587);
-      return port === 465;
-    })(),
+    secure: (process.env.SMTP_SECURE === 'true'),
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     }
   });
-  // Surface transport readiness in logs
-  try {
-    mailTransporter.verify().then(() => {
-      console.log('[mail] transporter ready (host=%s, port=%s)', process.env.SMTP_HOST, process.env.SMTP_PORT || 587);
-    }).catch(err => {
-      console.error('[mail] transporter verify failed:', err && (err.stack || err.message || err));
-    });
-  } catch (e) {
-    console.error('[mail] transporter verify threw:', e && (e.stack || e.message || e));
-  }
 
+try {
+  mailTransporter.verify()
+    .then(() => console.log('[mail] transporter ready (host=%s, port=%s)', process.env.SMTP_HOST, process.env.SMTP_PORT || 587))
+    .catch(err => console.error('[mail] transporter verify failed:', err && (err.stack || err.message || err)));
+} catch (e) {
+  console.error('[mail] transporter verify threw:', e && (e.stack || e.message || e));
+}
 }
 
 // ----- Kiosk access configuration -----
@@ -634,7 +619,8 @@ function verifyPassword(password, admin) {
  * @param {string} text Plain‑text body of the email
  * @param {Array<object>} [attachments] Optional array of attachment objects
  */
-function sendEmail(to, subject, text, attachments = []) {
+async function sendEmail(to, subject, text, attachments = []) {
+
   // Determine the configured From address.  We support both MAIL_FROM and
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
   const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
@@ -646,14 +632,18 @@ function sendEmail(to, subject, text, attachments = []) {
       text,
       attachments: attachments && attachments.length ? attachments : undefined
     };
-    mailTransporter.sendMail(mailOptions).catch(err => {
-      console.error('Email send error:', err);
-    });
-  } else {
+    try {
+      const info = await mailTransporter.sendMail(mailOptions);
+      console.log('[mail] sent', info && (info.messageId || info.response || 'ok'));
+    } catch (err) {
+      console.error('Email send error:', err && (err.stack || err.message || err));
+    }
+} else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
     console.log('\n--- EMAIL NOTIFICATION ---');
-    console.log(`To: ${to}`);
+    console.log(`To: ${to}
+`);
     console.log(`Subject: ${subject}`);
     console.log(text);
     if (attachments && attachments.length) {
@@ -929,8 +919,7 @@ async function sendDayBeforeReminders() {
 // invocation, set the REMINDER_TOKEN environment variable to a secret string
 // and pass it as the `token` query parameter.  If no REMINDER_TOKEN is
 // defined, the endpoint will run without authentication.
-app.get('/api/reminders/daily', (req, res) => {
-  const secret = process.env.REMINDER_TOKEN || process.env.REMINDER_SECRET;
+app.get('/api/reminders/daily', (req, res) => { console.log('[reminders] endpoint hit', new Date().toISOString()); const secret = process.env.REMINDER_TOKEN || process.env.REMINDER_SECRET;
   if (secret) {
     const provided = req.query.token;
     if (!provided || provided !== secret) {
@@ -1992,3 +1981,30 @@ app.listen(PORT, () => {
     console.log(`Booking app listening at http://localhost:${PORT}`);
   });
 })();
+
+// Debug route to send a test email quickly
+app.get('/api/debug/send-test', async (req, res) => {
+  try {
+    const to = String(req.query.to || '').trim();
+    const ics = String(req.query.ics || 'false').toLowerCase() === 'true';
+    if (!to) return res.status(400).json({ error: 'missing ?to=' });
+    const attachments = [];
+    if (ics) {
+      try {
+        const now = new Date();
+        const later = new Date(now.getTime() + 60*60*1000);
+        const fake = { id: 'test-'+now.getTime(), date: now.toISOString().slice(0,10), startTime: now.toTimeString().slice(0,5), endTime: later.toTimeString().slice(0,5), name: 'Test', email: to };
+        const icsContent = generateICS(fake, 'Test Event', 'REQUEST', false);
+        attachments.push({ filename: 'test.ics', content: icsContent, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
+      } catch(e) {
+        console.error('[debug] ics generation failed', e);
+      }
+    }
+    await sendEmail(to, 'Booking App Test', 'Hello from your booking app.', attachments);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[debug] send-test error', e);
+    res.status(500).json({ error: 'send-test failed', details: String(e && (e.message || e)) });
+  }
+});
+
