@@ -183,9 +183,13 @@
     async function login() {
       const btn = document.getElementById('loginBtn');
       const status = document.getElementById('loginStatus');
+      // Reset any previous error message and disable the button while the
+      // request is in flight.  This prevents duplicate submissions.
       status.textContent = '';
       btn.disabled = true;
       try {
+        // Capture the username/password from the form fields.  Trim to
+        // avoid accidental whitespace causing authentication failures.
         const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value.trim();
         const res = await fetch('/api/login', {
@@ -193,38 +197,31 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-          status.textContent = err.error || 'Login failed';
-          return;
+        // Always attempt to parse the JSON response; if parsing fails
+        // return an empty object so that optional chaining below does not
+        // throw.
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data && data.token) {
+          // Persist the returned token to localStorage for subsequent requests.
+          token = data.token;
+          localStorage.setItem('adminToken', token);
+          // Hide the login card and show the main admin UI.
+          document.getElementById('loginCard').classList.add('hidden');
+          document.getElementById('app').classList.remove('hidden');
+          // Refresh all data in the admin UI.
+          await refreshAll();
+        } else {
+          // When the response is not OK or no token is returned, display an
+          // appropriate error message.  Fallback to a generic message if
+          // the server did not provide one.
+          status.textContent = (data && data.error) || 'Login failed';
         }
-        const data = await res.json();
-        if (!data || !data.token) {
-          status.textContent = 'No token returned by server.';
-          return;
-        }
-        token = data.token;
-        localStorage.setItem('adminToken', token);
-        document.getElementById('loginCard').classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
-        await refreshAll();
       } catch (e) {
         console.error('Login error', e);
         status.textContent = 'Login error. See console for details.';
       } finally {
+        // Re-enable the button regardless of outcome.
         btn.disabled = false;
-      }
-    });
-      if (res.ok) {
-        const data = await res.json();
-        token = data.token;
-        localStorage.setItem('adminToken', token);
-        document.getElementById('loginCard').classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
-        await refreshAll();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Login failed' }));
-        document.getElementById('loginStatus').textContent = err.error || 'Login failed';
       }
     }
 
