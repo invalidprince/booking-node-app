@@ -625,7 +625,7 @@ function sendEmail(to, subject, text, attachments = []) {
     };
     mailTransporter.sendMail(mailOptions)
       .then(info => console.log('[mail] sent', info && (info.messageId || info.response || 'ok')))
-      .catch(err => { console.error('Email send error:', err && (err.stack or err)); });
+      .catch(err => { console.error('Email send error:', err && (err.stack || err)); });
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
