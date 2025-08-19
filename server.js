@@ -1312,7 +1312,7 @@ app.get('/api/admins', adminAuth, (req, res) => {
 
 app.post('/api/admins', adminAuth, (req, res) => {
   // Only owners can add new admins
-  if ((!['owner','superadmin'].includes(req.adminRole)) {
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { username, password, role } = req.body;
@@ -1336,7 +1336,7 @@ app.post('/api/admins', adminAuth, (req, res) => {
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
   // Only owners can delete admins
-  if ((!['owner','superadmin'].includes(req.adminRole)) {
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
