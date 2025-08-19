@@ -623,8 +623,24 @@ function sendEmail(to, subject, text, attachments = []) {
       text,
       attachments: attachments && attachments.length ? attachments : undefined
     };
+    // Attempt to send the email.  If the send fails and attachments were
+    // included, try a second time without attachments.  This guards
+    // against providers that reject certain attachment types (e.g. iCal)
+    // and restores the pre‑attachment behaviour where confirmations
+    // without the .ics file still delivered successfully.
     mailTransporter.sendMail(mailOptions).catch(err => {
       console.error('Email send error:', err);
+      if (attachments && attachments.length) {
+        const fallbackOptions = {
+          from: fromAddr,
+          to,
+          subject,
+          text
+        };
+        mailTransporter.sendMail(fallbackOptions).catch(err2 => {
+          console.error('Fallback email send error:', err2);
+        });
+      }
     });
   } else {
     // No SMTP configured; log to console instead.  Include attachment
