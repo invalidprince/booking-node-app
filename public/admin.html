@@ -181,13 +181,40 @@
     }
 
     async function login() {
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value.trim();
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
+      const btn = document.getElementById('loginBtn');
+      const status = document.getElementById('loginStatus');
+      status.textContent = '';
+      btn.disabled = true;
+      try {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value.trim();
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          status.textContent = err.error || 'Login failed';
+          return;
+        }
+        const data = await res.json();
+        if (!data || !data.token) {
+          status.textContent = 'No token returned by server.';
+          return;
+        }
+        token = data.token;
+        localStorage.setItem('adminToken', token);
+        document.getElementById('loginCard').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+        await refreshAll();
+      } catch (e) {
+        console.error('Login error', e);
+        status.textContent = 'Login error. See console for details.';
+      } finally {
+        btn.disabled = false;
+      }
+    });
       if (res.ok) {
         const data = await res.json();
         token = data.token;
@@ -416,6 +443,14 @@
 
     // Hook up pagination buttons after DOM is ready
     document.addEventListener('DOMContentLoaded', () => {
+    // Global error banner
+    window.addEventListener('error', (e) => {
+      const div = document.getElementById('loginStatus');
+      if (div && !div.textContent) {
+        div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
+      }
+    });
+
       const prevBtn = document.getElementById('prevPageBtn');
       const nextBtn = document.getElementById('nextPageBtn');
       if (prevBtn && nextBtn) {
@@ -678,6 +713,14 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+    // Global error banner
+    window.addEventListener('error', (e) => {
+      const div = document.getElementById('loginStatus');
+      if (div && !div.textContent) {
+        div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
+      }
+    });
+
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
