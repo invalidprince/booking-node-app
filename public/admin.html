@@ -27,7 +27,11 @@
     <div class="row">
       <input id="username" placeholder="Username (admin@example.com)">
       <input id="password" placeholder="Password (admin123)" type="password">
-      <button id="loginBtn">Login</button>
+          <!-- Ensure the login button does not trigger a form submission and page reload
+               by explicitly setting type="button". Without this, some browsers
+               treat it as a submit button which causes the page to reload and
+               break the login flow. -->
+          <button id="loginBtn" type="button">Login</button>
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
@@ -180,7 +184,14 @@
       return opts;
     }
 
-    async function login() {
+    // Accept an optional event parameter so that we can prevent the default
+    // behaviour when the login button is inside a form.  Without calling
+    // preventDefault() some browsers will reload the page on click because
+    // buttons default to type="submit" if not specified.
+    async function login(evt) {
+      if (evt && typeof evt.preventDefault === 'function') {
+        evt.preventDefault();
+      }
       const btn = document.getElementById('loginBtn');
       const status = document.getElementById('loginStatus');
       // Reset any previous error message and disable the button while the
