@@ -166,38 +166,15 @@ const APP_BASE_URL = process.env.APP_BASE_URL || '';
 // If not provided, sendEmail will fall back to console logging.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-  
-mailTransporter = nodemailer.createTransport({
+  mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
-    // For 587 + STARTTLS use secure:false; for 465 (implicit TLS) use secure:true.
-    // Also allow SMTP_SECURE to override, and support SMTP_ENCRYPTION=STARTTLS/SSL.
-    secure: (function() {
-      if (typeof process.env.SMTP_SECURE !== 'undefined') {
-        return String(process.env.SMTP_SECURE).toLowerCase() === 'true';
-      }
-      const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
-      if (enc === 'starttls') return false;
-      if (enc === 'ssl' || enc === 'tls') return true;
-      const port = Number(process.env.SMTP_PORT || 587);
-      return port === 465;
-    })(),
+    secure: (process.env.SMTP_SECURE === 'true'),
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     }
   });
-  // Surface transport readiness in logs
-  try {
-    mailTransporter.verify().then(() => {
-      console.log('[mail] transporter ready (host=%s, port=%s)', process.env.SMTP_HOST, process.env.SMTP_PORT || 587);
-    }).catch(err => {
-      console.error('[mail] transporter verify failed:', err && (err.stack || err.message || err));
-    });
-  } catch (e) {
-    console.error('[mail] transporter verify threw:', e && (e.stack || e.message || e));
-  }
-
 }
 
 // ----- Kiosk access configuration -----
@@ -637,7 +614,7 @@ function verifyPassword(password, admin) {
 function sendEmail(to, subject, text, attachments = []) {
   // Determine the configured From address.  We support both MAIL_FROM and
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
-  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
+  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
   if (mailTransporter && fromAddr) {
     const mailOptions = {
       from: fromAddr,
@@ -646,9 +623,9 @@ function sendEmail(to, subject, text, attachments = []) {
       text,
       attachments: attachments && attachments.length ? attachments : undefined
     };
-    mailTransporter.sendMail(mailOptions).catch(err => {
-      console.error('Email send error:', err);
-    });
+    mailTransporter.sendMail(mailOptions)
+      .then(info => console.log('[mail] sent', info && (info.messageId || info.response || 'ok')))
+      .catch(err => { console.error('Email send error:', err && (err.stack or err)); });
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
@@ -803,74 +780,45 @@ function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recu
  * @param {boolean} cancelled Whether the event should include a cancelled status
  * @returns {string} iCalendar formatted string
  */
-
 function generateICS(booking, spaceName, method = 'REQUEST', cancelled = false) {
   const { id, date, startTime, endTime, name, email } = booking;
-
-  // Expect date in YYYY-MM-DD and time in HH:mm (24h). Build a UTC timestamp.
+  // Parse date and times into components
   const [yStr, mStr, dStr] = date.split('-');
   const [startH, startM] = startTime.split(':').map(n => parseInt(n, 10));
   const [endH, endM] = endTime.split(':').map(n => parseInt(n, 10));
-
-  // Construct Date objects in local time, then convert to UTC 'Z' format for maximum compatibility
-  const startLocal = new Date(Number(yStr), Number(mStr) - 1, Number(dStr), startH, startM, 0);
-  const endLocal = new Date(Number(yStr), Number(mStr) - 1, Number(dStr), endH, endM, 0);
-
-  function toIcsUtc(dt) {
-    const y = dt.getUTCFullYear();
-    const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(dt.getUTCDate()).padStart(2, '0');
-    const hh = String(dt.getUTCHours()).padStart(2, '0');
-    const mm = String(dt.getUTCMinutes()).padStart(2, '0');
-    const ss = String(dt.getUTCSeconds()).padStart(2, '0');
-    return `${y}${m}${d}T${hh}${mm}${ss}Z`;
-  }
-
-  const dtStart = toIcsUtc(startLocal);
-  const dtEnd = toIcsUtc(endLocal);
-
-  // DTSTAMP should also be UTC
-  const now = new Date();
-  const dtStamp = toIcsUtc(now);
-
-  // Organizer/from address
-  const orgEmail = (process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@example.com')
-    .replace(/^.*<([^>]+)>.*/, '$1'); // strip display name if present
-
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  // Build timestamps in format YYYYMMDDTHHMMSS
+  const dtStart = `${yStr}${mStr}${dStr}T${String(startH).padStart(2, '0')}${String(startM).padStart(2, '0')}00`;
+  const dtEnd = `${yStr}${mStr}${dStr}T${String(endH).padStart(2, '0')}${String(endM).padStart(2, '0')}00`;
+  const dtStamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
   const lines = [];
   lines.push('BEGIN:VCALENDAR');
-  lines.push('PRODID:-//FBHI Booking//EN');
   lines.push('VERSION:2.0');
-  lines.push('CALSCALE:GREGORIAN');
+  lines.push('PRODID:-//Office Booking//EN');
   lines.push(`METHOD:${method}`);
   lines.push('BEGIN:VEVENT');
-  lines.push(`UID:${id}@booking.fbhi`);
+  lines.push(`UID:${id}@booking`);
   lines.push(`DTSTAMP:${dtStamp}`);
   lines.push(`DTSTART:${dtStart}`);
   lines.push(`DTEND:${dtEnd}`);
   lines.push(`SUMMARY:Booking for ${spaceName}`);
+  lines.push(`LOCATION:${spaceName}`);
+  if (name && email) {
+    // RFC5545 requires escaping commas and semicolons in CN
+    const cn = String(name).replace(/[,;]/g, '\\$&');
+    lines.push(`ORGANIZER;CN=${cn}:MAILTO:${email}`);
+  }
   lines.push(`DESCRIPTION:Office booking for ${spaceName}`);
-  lines.push('TRANSP:OPAQUE');
-  lines.push('SEQUENCE:' + (cancelled ? '1' : '0'));
   if (cancelled) {
     lines.push('STATUS:CANCELLED');
-  } else {
-    lines.push('STATUS:CONFIRMED');
-  }
-  // Organizer/Attendee (helps some clients treat as a meeting invite)
-  lines.push(`ORGANIZER;CN=FBHI Bookings:mailto:${orgEmail}`);
-  if (email) {
-    const cn = name ? name.replace(/[,;\]/g, ' ') : email;
-    lines.push(`ATTENDEE;CN=${cn};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${email}`);
+    lines.push('SEQUENCE:1');
   }
   lines.push('END:VEVENT');
   lines.push('END:VCALENDAR');
-
-  // Use CRLF line endings per RFC 5545
-  return lines.join('
-');
+  return lines.join('\r\n');
 }
-
 
 function adminAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -2021,3 +1969,52 @@ app.listen(PORT, () => {
     console.log(`Booking app listening at http://localhost:${PORT}`);
   });
 })();
+
+// Debug route to test email with/without ICS
+app.get('/api/debug/send-test', async (req, res) => {
+  try {
+    const to = req.query.to || process.env.DEBUG_TO || process.env.SMTP_USER;
+    const withIcs = String(req.query.ics || 'false').toLowerCase() === 'true';
+    if (!to) return res.status(400).json({ error: 'Missing ?to=' });
+    const text = withIcs ? 'Test email with ICS attachment' : 'Plain test email (no ICS)';
+    const attachments = [];
+    if (withIcs) {
+      const now = new Date();
+      const inOneHour = new Date(now.getTime() + 60*60*1000);
+      const pad = n => String(n).padStart(2, '0');
+      const toUtc = (d) => d.getUTCFullYear().toString()
+        + pad(d.getUTCMonth()+1) + pad(d.getUTCDate())
+        + 'T' + pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + '00Z';
+      const dtstart = toUtc(now);
+      const dtend = toUtc(inOneHour);
+      const uid = 'debug-' + now.getTime() + '@fbhi.net';
+      const organizer = (process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@fbhi.net').replace(/.*<([^>]+)>.*/,'$1');
+      const attendee = to;
+      const ics = [
+        'BEGIN:VCALENDAR',
+        'PRODID:-//FBHI//Booking App//EN',
+        'VERSION:2.0',
+        'CALSCALE:GREGORIAN',
+        'METHOD:REQUEST',
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTAMP:${dtstart}`,
+        `DTSTART:${dtstart}`,
+        `DTEND:${dtend}`,
+        'STATUS:CONFIRMED',
+        `SUMMARY:Test Invite`,
+        `ORGANIZER;CN=FBHI Bookings:mailto:${organizer}`,
+        `ATTENDEE;CN=Recipient;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${attendee}`,
+        'END:VEVENT',
+        'END:VCALENDAR'
+      ].join('\\r\\n');
+      attachments.push({ filename: 'test.ics', content: ics, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
+    }
+    await sendEmail(to, withIcs ? 'ICS Test' : 'Plain Test', text, attachments);
+    return res.json({ ok: true, to, ics: withIcs });
+  } catch (e) {
+    console.error('debug send-test error', e && (e.stack or e));
+    return res.status(500).json({ error: 'send-test failed' });
+  }
+});
+
