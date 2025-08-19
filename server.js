@@ -166,15 +166,38 @@ const APP_BASE_URL = process.env.APP_BASE_URL || '';
 // If not provided, sendEmail will fall back to console logging.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-  mailTransporter = nodemailer.createTransport({
+  
+mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
-    secure: (process.env.SMTP_SECURE === 'true'),
+    // For 587 + STARTTLS use secure:false; for 465 (implicit TLS) use secure:true.
+    // Also allow SMTP_SECURE to override, and support SMTP_ENCRYPTION=STARTTLS/SSL.
+    secure: (function() {
+      if (typeof process.env.SMTP_SECURE !== 'undefined') {
+        return String(process.env.SMTP_SECURE).toLowerCase() === 'true';
+      }
+      const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
+      if (enc === 'starttls') return false;
+      if (enc === 'ssl' || enc === 'tls') return true;
+      const port = Number(process.env.SMTP_PORT || 587);
+      return port === 465;
+    })(),
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     }
   });
+  // Surface transport readiness in logs
+  try {
+    mailTransporter.verify().then(() => {
+      console.log('[mail] transporter ready (host=%s, port=%s)', process.env.SMTP_HOST, process.env.SMTP_PORT || 587);
+    }).catch(err => {
+      console.error('[mail] transporter verify failed:', err && (err.stack || err.message || err));
+    });
+  } catch (e) {
+    console.error('[mail] transporter verify threw:', e && (e.stack || e.message || e));
+  }
+
 }
 
 // ----- Kiosk access configuration -----
@@ -614,7 +637,7 @@ function verifyPassword(password, admin) {
 function sendEmail(to, subject, text, attachments = []) {
   // Determine the configured From address.  We support both MAIL_FROM and
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
-  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
+  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
   if (mailTransporter && fromAddr) {
     const mailOptions = {
       from: fromAddr,
@@ -1080,7 +1103,7 @@ app.post('/api/bookings', (req, res) => {
   let attachments = [];
   try {
     const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
+    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
   } catch (err) {
     console.error('Failed to generate iCalendar attachment:', err);
   }
@@ -1114,7 +1137,7 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
         'CANCEL',
         true
       );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar; charset="utf-8"; method=CANCEL' });
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
@@ -1152,7 +1175,7 @@ app.get('/cancel/:id', (req, res) => {
         'CANCEL',
         true
       );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar; charset="utf-8"; method=CANCEL' });
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
@@ -1222,7 +1245,7 @@ app.get('/api/bookings/auto', (req, res) => {
       let attachments = [];
       try {
         const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
+        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
       } catch (err) {
         console.error('Failed to generate iCalendar attachment:', err);
       }
