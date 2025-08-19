@@ -623,9 +623,9 @@ function sendEmail(to, subject, text, attachments = []) {
       text,
       attachments: attachments && attachments.length ? attachments : undefined
     };
-    mailTransporter.sendMail(mailOptions)
-      .then(info => console.log('[mail] sent', info && (info.messageId || info.response || 'ok')))
-      .catch(err => { console.error('Email send error:', err && (err.stack || err)); });
+    mailTransporter.sendMail(mailOptions).catch(err => {
+      console.error('Email send error:', err);
+    });
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
@@ -1080,7 +1080,7 @@ app.post('/api/bookings', (req, res) => {
   let attachments = [];
   try {
     const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
+    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
   } catch (err) {
     console.error('Failed to generate iCalendar attachment:', err);
   }
@@ -1114,7 +1114,7 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
         'CANCEL',
         true
       );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar; charset="utf-8"; method=CANCEL' });
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
@@ -1152,7 +1152,7 @@ app.get('/cancel/:id', (req, res) => {
         'CANCEL',
         true
       );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar; charset="utf-8"; method=CANCEL' });
+      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
@@ -1222,7 +1222,7 @@ app.get('/api/bookings/auto', (req, res) => {
       let attachments = [];
       try {
         const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
+        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
       } catch (err) {
         console.error('Failed to generate iCalendar attachment:', err);
       }
@@ -1969,52 +1969,3 @@ app.listen(PORT, () => {
     console.log(`Booking app listening at http://localhost:${PORT}`);
   });
 })();
-
-// Debug route to test email with/without ICS
-app.get('/api/debug/send-test', async (req, res) => {
-  try {
-    const to = req.query.to || process.env.DEBUG_TO || process.env.SMTP_USER;
-    const withIcs = String(req.query.ics || 'false').toLowerCase() === 'true';
-    if (!to) return res.status(400).json({ error: 'Missing ?to=' });
-    const text = withIcs ? 'Test email with ICS attachment' : 'Plain test email (no ICS)';
-    const attachments = [];
-    if (withIcs) {
-      const now = new Date();
-      const inOneHour = new Date(now.getTime() + 60*60*1000);
-      const pad = n => String(n).padStart(2, '0');
-      const toUtc = (d) => d.getUTCFullYear().toString()
-        + pad(d.getUTCMonth()+1) + pad(d.getUTCDate())
-        + 'T' + pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + '00Z';
-      const dtstart = toUtc(now);
-      const dtend = toUtc(inOneHour);
-      const uid = 'debug-' + now.getTime() + '@fbhi.net';
-      const organizer = (process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@fbhi.net').replace(/.*<([^>]+)>.*/,'$1');
-      const attendee = to;
-      const ics = [
-        'BEGIN:VCALENDAR',
-        'PRODID:-//FBHI//Booking App//EN',
-        'VERSION:2.0',
-        'CALSCALE:GREGORIAN',
-        'METHOD:REQUEST',
-        'BEGIN:VEVENT',
-        `UID:${uid}`,
-        `DTSTAMP:${dtstart}`,
-        `DTSTART:${dtstart}`,
-        `DTEND:${dtend}`,
-        'STATUS:CONFIRMED',
-        `SUMMARY:Test Invite`,
-        `ORGANIZER;CN=FBHI Bookings:mailto:${organizer}`,
-        `ATTENDEE;CN=Recipient;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=FALSE:mailto:${attendee}`,
-        'END:VEVENT',
-        'END:VCALENDAR'
-      ].join('\\r\\n');
-      attachments.push({ filename: 'test.ics', content: ics, contentType: 'text/calendar; charset="utf-8"; method=REQUEST' });
-    }
-    await sendEmail(to, withIcs ? 'ICS Test' : 'Plain Test', text, attachments);
-    return res.json({ ok: true, to, ics: withIcs });
-  } catch (e) {
-    console.error('debug send-test error', e && (e.stack || e));
-    return res.status(500).json({ error: 'send-test failed' });
-  }
-});
-
