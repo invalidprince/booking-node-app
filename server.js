@@ -2013,7 +2013,7 @@ app.get('/api/debug/send-test', async (req, res) => {
     await sendEmail(to, withIcs ? 'ICS Test' : 'Plain Test', text, attachments);
     return res.json({ ok: true, to, ics: withIcs });
   } catch (e) {
-    console.error('debug send-test error', e && (e.stack or e));
+    console.error('debug send-test error', e && (e.stack || e));
     return res.status(500).json({ error: 'send-test failed' });
   }
 });
