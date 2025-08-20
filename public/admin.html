@@ -42,12 +42,10 @@
       <div class="row">
         <input id="bName" placeholder="Name">
         <input id="bEmail" placeholder="Email">
-        <!-- Use a text input for the booking date and wire up a simple date picker via JS.  A native
-             `<input type="date">` field would normally suffice, but on some platforms the
-             built‑in picker either fails to open or rejects keyboard input.  Making it read‑only
-             prevents the browser from treating it as a freeform text box and ensures the custom
-             dropdown is always used. -->
-        <input id="bDate" type="text" placeholder="Date" readonly>
+        <!-- Use a native date input for the booking date just like the main booking page.
+             The built‑in browser calendar allows admins to pick a date via a calendar overlay.
+             A simple `<input type="date">` provides a familiar calendar widget. -->
+        <input id="bDate" type="date" placeholder="Date">
         <input id="bStart" placeholder="Start Time" readonly>
         <input id="bEnd" placeholder="End Time" readonly>
         <select id="bSpace"></select>
@@ -477,7 +475,11 @@
       // the server may return 401/403 and the dropdown remains empty. Passing
       // the result of setAuthHeaders() will attach the Authorization header
       // containing the current admin token. Note: GET is default.
-      const res = await fetch('/api/spaces', setAuthHeaders());
+      // Fetch the list of spaces without requiring auth.  The spaces API is
+      // public (as seen on the booking page), so it’s safe to call it without
+      // credentials. Using an unauthenticated request also avoids cases where
+      // a valid token is not yet available when the page first loads.
+      const res = await fetch('/api/spaces');
       const spaces = await res.json();
       const tbody = document.querySelector('#spacesTable tbody');
       tbody.innerHTML = '';
@@ -532,8 +534,16 @@
             const end12 = to12Hour(b.endTime);
             const dateFormatted = formatDateWithDay(b.date);
             const recurrenceDesc = formatRecurrence(b.recurrence);
-            tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12} - ${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
-              <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
+            // Render the booking row with separate start and end time columns and a dedicated
+            // Action column for the cancel button.  Previously the start and end times were
+            // combined into a single cell and the cancel button leaked into the Recurring
+            // column, which caused the layout issues the user reported.
+            tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
+              `<td>${dateFormatted}</td>` +
+              `<td>${start12}</td>` +
+              `<td>${end12}</td>` +
+              `<td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>` +
+              `<td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
             tbody.appendChild(tr);
           });
 
