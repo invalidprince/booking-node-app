@@ -22,7 +22,16 @@
 </head>
 <body>
   <h1>Admin Portal</h1>
-  
+  <div id="loginCard" class="card">
+    <h2>Login</h2>
+    <div class="row">
+      <input id="username" placeholder="Username (admin@example.com)">
+      <input id="password" placeholder="Password (admin123)" type="password">
+      <!-- Prevent accidental form-submit reloads -->
+      <button id="loginBtn" type="button">Login</button>
+    </div>
+    <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
+  </div>
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
       <h2>Bookings</h2>
       <div class="row">
@@ -676,20 +685,18 @@
 
     // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
-      
-    // Bind only if elements exist (prevents null addEventListener)
-    on('loginBtn','click', login);
-    on('logoutBtn','click', logout);
-    on('addSpaceBtn','click', addSpace);
-    on('addAdminBtn','click', addAdmin);
-    on('generateKioskBtn','click', generateKioskToken);
-    on('addBookingBtn','click', addBooking);
-    on('loadAnalyticsBtn','click', loadAnalytics);
-    on('loadSummaryBtn','click', loadSummary);
-    on('downloadCsvBtn','click', downloadCsv);
-    
       updateSettingsLinkIfNeeded();
       ensureSuperAdminIfNeeded();
+      on('loginBtn','click', login);
+      on('logoutBtn','click', logout);
+      on('addSpaceBtn','click', addSpace);
+      on('addAdminBtn','click', addAdmin);
+      on('generateKioskBtn','click', generateKioskToken);
+      on('addBookingBtn','click', addBooking);
+      on('loadAnalyticsBtn','click', loadAnalytics);
+      on('loadSummaryBtn','click', loadSummary);
+      on('downloadCsvBtn','click', downloadCsv);
+
       // Global error banner
       window.addEventListener('error', (e) => {
         const div = document.getElementById('loginStatus');
