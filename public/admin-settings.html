@@ -22,6 +22,8 @@
 </head>
 <body>
   <h1>Admin Portal</h1>
+  <!-- Back link to return to the main admin dashboard -->
+  <div style="margin-bottom:12px;"><a href="/admin.html" style="text-decoration:none; font-size:14px;">← Back to Dashboard</a></div>
   <div id="loginCard" class="card">
     <h2>Login</h2>
     <div class="row">
@@ -61,8 +63,7 @@
         <!-- Role selection for new admin users -->
         <select id="aRole">
           <option value="admin" selected>Admin</option>
-          <option value="analyst">Analyst</option>
-          <option value="frontdesk">FrontDesk</option>
+          <option value="superadmin">Super Admin</option>
         </select>
         <button id="addAdminBtn">Add Admin</button>
       </div>
