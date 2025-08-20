@@ -837,64 +837,25 @@ function adminAuth(req, res, next) {
 }
 
 // ----- API routes -----------------------------------------------------------
-
-/**
-/* REMOVED REMINDER EMAIL LOGIC
- * Send day‑before reminder emails for tomorrow's bookings.
- *
- * This helper function enumerates all bookings scheduled for the next
- * calendar day and dispatches a reminder email to the booking contact.
- * Recurring bookings are evaluated using isRecurringOnDate() so that
- * reminders are sent for each applicable occurrence.  Cancelled bookings
- * are skipped.  The reminder includes the booking details and a
- * cancellation link if APP_BASE_URL is configured.  iCalendar attachments
- * are not included in reminders.
- */
-async function sendDayBeforeReminders() {
-  // Determine tomorrow's date in local time.  We use a date constructed
-  // from the current time components to avoid timezone drift when
-  // converting to ISO strings.  Note: this code runs in the server's
-  // timezone (set via environment or container) so schedule your cron
-  // accordingly if you need a specific timezone.
-  const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  const dateStr = tomorrow.toISOString().split('T')[0];
-  // Iterate over bookings and send reminders for those that occur tomorrow
-  for (const b of bookings) {
-    // Skip cancelled bookings (undefined treated as false)
-    if (b.cancelled) continue;
-    // Does this booking occur on tomorrow's date?  For recurring bookings
-    // check the recurrence rule.
-    const occurs = b.date === dateStr || isRecurringOnDate(dateStr, b.recurring);
-    if (!occurs) continue;
-    // Look up the space name
-    const space = spaces.find(s => s.id === b.spaceId);
-    const spaceName = space ? space.name : 'a space';
-    // Build cancellation link if configured
-    let cancelLink = '';
-    if (APP_BASE_URL) {
-      cancelLink = `${APP_BASE_URL}/cancel/${b.id}`;
+// Admin login endpoint
+app.post('/api/login', (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Missing username or password' });
     }
-    const messageLines = [];
-    messageLines.push(`This is a reminder for your upcoming booking.`);
-    messageLines.push(``);
-    messageLines.push(`Space: ${spaceName}`);
-    messageLines.push(`Date: ${dateStr}`);
-    messageLines.push(`Time: ${to12Hour(b.startTime)} – ${to12Hour(b.endTime)}`);
-    if (cancelLink) {
-      messageLines.push('');
-      messageLines.push(`If you need to cancel, please visit the following link:`);
-      messageLines.push(cancelLink);
+    const uname = String(username).toLowerCase();
+    const admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
+    if (!admin || !verifyPassword(password, admin)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
     }
-    const message = messageLines.join('\n');
-    try {
-      // Use the booking's stored email; normalise to lower case for consistency
-    delete admin.password;
-    saveData();
+    const token = uuidv4();
+    tokens[token] = admin.id;
+    return res.json({ token, role: admin.role || 'admin' });
+  } catch (e) {
+    console.error('Login error', e);
+    return res.status(500).json({ error: 'Login failed' });
   }
-  const token = uuidv4();
-  tokens[token] = admin.id;
-  res.json({ token });
 });
 
 // Spaces endpoints
