@@ -22,7 +22,7 @@
 </head>
 <body>
   <h1>Admin Portal</h1>
-
+  
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div></div><div class="card">
       <h2>Spaces</h2>
       <div class="row">
@@ -86,15 +86,37 @@
     let token = localStorage.getItem('adminToken') || '';
 
     
-    function ensureSuperAdmin() {
+    // ---- injected utilities for split pages ----
+    function q(id){ return document.getElementById(id); }
+    function on(id, event, handler){
+      const el = q(id);
+      if (el && typeof el.addEventListener === 'function') el.addEventListener(event, handler);
+    }
+    function ensureSuperAdminIfNeeded(){
       const role = localStorage.getItem('adminRole') || 'admin';
-      const tokenVal = localStorage.getItem('adminToken') || '';
-      if (!tokenVal) return;
-      if (role !== 'superadmin') {
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return; // login flow will show app after auth
+      if (true && role !== 'superadmin') {
         window.location.href = '/admin.html';
       }
     }
-
+    function updateSettingsLinkIfNeeded(){
+      const right = document.getElementById('rightActions');
+      if (!right) return;
+      right.innerHTML = '';
+      const role = localStorage.getItem('adminRole') || 'admin';
+      if (!true && role === 'superadmin'){
+        const a = document.createElement('a');
+        a.href = '/admin-settings.html';
+        a.title = 'Settings';
+        a.textContent = '⚙️ Settings';
+        a.style.textDecoration = 'none';
+        a.style.fontSize = '14px';
+        right.appendChild(a);
+      }
+    }
+    // ---- end utilities ----
+    
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
@@ -125,7 +147,8 @@
           if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
-        ensureSuperAdmin();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
           await refreshAll();
         } else {
           if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
@@ -140,11 +163,7 @@
       }
     }
 
-    async function refreshAll() {
-      await loadSpaces();
-      await loadAdmins();
-      await loadKioskTokens();
-    }
+    async function refreshAll(){ await loadSpaces(); await loadAdmins(); await loadKioskTokens(); }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
     function convertTo24h(str) {
@@ -641,7 +660,20 @@
 
     // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
-      ensureSuperAdmin();
+      
+    // Bind only if elements exist (prevents null addEventListener)
+    on('loginBtn','click', login);
+    on('logoutBtn','click', logout);
+    on('addSpaceBtn','click', addSpace);
+    on('addAdminBtn','click', addAdmin);
+    on('generateKioskBtn','click', generateKioskToken);
+    on('addBookingBtn','click', addBooking);
+    on('loadAnalyticsBtn','click', loadAnalytics);
+    on('loadSummaryBtn','click', loadSummary);
+    on('downloadCsvBtn','click', downloadCsv);
+    
+      updateSettingsLinkIfNeeded();
+      ensureSuperAdminIfNeeded();
       // Global error banner
       window.addEventListener('error', (e) => {
         const div = document.getElementById('loginStatus');
@@ -674,37 +706,38 @@
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
-        ensureSuperAdmin();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
         refreshAll();
       }
 
       // Event bindings
-      var _e=document.getElementById('loginBtn'); if(_e){_e.addEventListener('click', login);}
-      var _e=document.getElementById('logoutBtn'); if(_e){_e.addEventListener('click', () => {
+      document.getElementById('loginBtn').addEventListener('click', login);
+      document.getElementById('logoutBtn').addEventListener('click', () => {
         localStorage.removeItem('adminToken');
         token = '';
         location.href = 'index.html';
       });
-      var _e=document.getElementById('addSpaceBtn'); if(_e){_e.addEventListener('click', addSpace);}
-      var _e=document.getElementById('spacesTable'); if(_e){_e.addEventListener('click', (e) => {
+      document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
+      document.getElementById('spacesTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delSpace')) {
           deleteSpace(e.target.dataset.id);
         }
       });
-      var _e=document.getElementById('addBookingBtn'); if(_e){_e.addEventListener('click', addBooking);}
-      var _e=document.getElementById('bookingsTable'); if(_e){_e.addEventListener('click', (e) => {
+      document.getElementById('addBookingBtn').addEventListener('click', addBooking);
+      document.getElementById('bookingsTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delBooking')) {
           deleteBooking(e.target.dataset.id);
         }
       });
-      var _e=document.getElementById('addAdminBtn'); if(_e){_e.addEventListener('click', addAdmin);}
-      var _e=document.getElementById('adminsTable'); if(_e){_e.addEventListener('click', (e) => {
+      document.getElementById('addAdminBtn').addEventListener('click', addAdmin);
+      document.getElementById('adminsTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delAdmin')) {
           const id = e.target.dataset.id;
           fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
         }
       });
-      var _e=document.getElementById('bRecurrenceType'); if(_e){_e.addEventListener('change', updateRecurrenceFields);
+      document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
       updateRecurrenceFields();
 
       // Initialise time pickers for start and end times
@@ -733,6 +766,5 @@
       }
     });
   </script>
-</script>
 </body>
 </html>
