@@ -499,13 +499,14 @@
     }
 
 
+    // Create a new admin user
     async function addAdmin() {
       try {
         const username = document.getElementById('aUser').value.trim();
-        const password = document.getElementById('aPass').value.trim();
+        const password = document.getElementById('aPass').value;
         const role = document.getElementById('aRole').value || 'admin';
         if (!username || !password) {
-          alert('Please enter a username and password.');
+          alert('Please enter a username and password for the new admin.');
           return;
         }
         const res = await fetch('/api/admins', setAuthHeaders({
@@ -514,20 +515,18 @@
           body: JSON.stringify({ username, password, role })
         }));
         if (res.ok) {
-          // Refresh table and clear inputs
-          await loadAdmins();
           document.getElementById('aUser').value = '';
           document.getElementById('aPass').value = '';
+          await loadAdmins();
         } else {
-          const err = await res.json().catch(() => ({ error: 'Failed to add admin' }));
-          alert(err.error || 'Failed to add admin');
+          const err = await res.json().catch(() => ({ error: 'Failed to create admin' }));
+          alert(err.error || 'Failed to create admin');
         }
       } catch (e) {
-        console.error('addAdmin error', e);
-        alert('Failed to add admin');
+        console.error(e);
+        alert('Failed to create admin');
       }
     }
-
     // Load kiosk tokens from the server and render into the table
     async function loadKioskTokens() {
       const tableBody = document.querySelector('#kioskTokensTable tbody');
