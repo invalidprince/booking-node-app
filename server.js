@@ -611,7 +611,24 @@ function verifyPassword(password, admin) {
  * @param {string} text Plain‑text body of the email
  * @param {Array<object>} [attachments] Optional array of attachment objects
  */
-function sendEmail(to, subject, text, attachments = []) {
+/**
+ * Send an email using the configured SMTP transporter.  This helper is
+ * implemented as an async function so callers may optionally await the
+ * completion of the send.  When attachments are provided they will be
+ * passed directly to nodemailer.  If no mail transporter is configured
+ * the email is logged to the console instead.  Any errors during
+ * transmission are surfaced via a rejected promise.  To preserve
+ * backwards compatibility with the previous implementation this function
+ * attempts a fallback send without attachments when the initial send
+ * fails.
+ *
+ * @param {string} to Recipient email address
+ * @param {string} subject Email subject line
+ * @param {string} text Plain‑text body of the email
+ * @param {Array<object>} [attachments] Optional array of attachment objects
+ * @returns {Promise<void>}
+ */
+async function sendEmail(to, subject, text, attachments = []) {
   // Determine the configured From address.  We support both MAIL_FROM and
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
   const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
@@ -621,27 +638,32 @@ function sendEmail(to, subject, text, attachments = []) {
       to,
       subject,
       text,
+      // Only include attachments when provided
       attachments: attachments && attachments.length ? attachments : undefined
     };
-    // Attempt to send the email.  If the send fails and attachments were
-    // included, try a second time without attachments.  This guards
-    // against providers that reject certain attachment types (e.g. iCal)
-    // and restores the pre‑attachment behaviour where confirmations
-    // without the .ics file still delivered successfully.
-    mailTransporter.sendMail(mailOptions).catch(err => {
+    try {
+      // Attempt to send the email with attachments (if any)
+      await mailTransporter.sendMail(mailOptions);
+    } catch (err) {
       console.error('Email send error:', err);
+      // Fallback: retry without attachments if attachments were present
       if (attachments && attachments.length) {
-        const fallbackOptions = {
-          from: fromAddr,
-          to,
-          subject,
-          text
-        };
-        mailTransporter.sendMail(fallbackOptions).catch(err2 => {
+        try {
+          const fallbackOptions = {
+            from: fromAddr,
+            to,
+            subject,
+            text
+          };
+          await mailTransporter.sendMail(fallbackOptions);
+        } catch (err2) {
           console.error('Fallback email send error:', err2);
-        });
+          throw err2;
+        }
+      } else {
+        throw err;
       }
-    });
+    }
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
@@ -651,7 +673,8 @@ function sendEmail(to, subject, text, attachments = []) {
     console.log(text);
     if (attachments && attachments.length) {
       attachments.forEach(att => {
-        console.log(`[Attachment: ${att.filename || 'file'} (${(att.content || '').length} bytes)]`);
+        const size = att.content ? att.content.length : 0;
+        console.log(`[Attachment: ${att.filename || 'file'} (${size} bytes)]`);
       });
     }
     console.log('--------------------------\n');
@@ -907,7 +930,7 @@ async function sendDayBeforeReminders() {
       // Use the booking's stored email; normalise to lower case for consistency
       const toEmail = String(b.email || '').trim().toLowerCase();
       if (!toEmail) continue;
-      sendEmail(toEmail, 'Upcoming Booking Reminder', message, []);
+      await sendEmail(toEmail, 'Upcoming Booking Reminder', message, []);
     } catch (err) {
       console.error('Failed to send reminder email:', err);
     }
@@ -1163,12 +1186,16 @@ app.post('/api/bookings', (req, res) => {
   } catch (err) {
     console.error('Failed to generate iCalendar attachment:', err);
   }
+  // Dispatch a booking confirmation email.  Fire and forget to avoid
+  // delaying the HTTP response.  Any errors will be logged to the console.
   sendEmail(
     emailNormalized,
     'Booking Confirmation',
     confirmationMessage,
     attachments
-  );
+  ).catch(err => {
+    console.error('Failed to send booking confirmation:', err);
+  });
   res.json({ id });
 });
 
@@ -1197,12 +1224,15 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
+    // Fire and forget cancellation email; log any failures
     sendEmail(
       removed.email,
       'Booking Cancelled',
       cancelMsg,
       attachments
-    );
+    ).catch(err => {
+      console.error('Failed to send cancellation email:', err);
+    });
     // Persist changes
     saveData();
     res.json({ ok: true });
@@ -1235,7 +1265,10 @@ app.get('/cancel/:id', (req, res) => {
     } catch (err) {
       console.error('Failed to generate cancellation iCalendar attachment:', err);
     }
-    sendEmail(removed.email, 'Booking Cancelled', cancelMsg, attachments);
+    // Fire and forget cancellation email; log any errors
+    sendEmail(removed.email, 'Booking Cancelled', cancelMsg, attachments).catch(err => {
+      console.error('Failed to send cancellation email:', err);
+    });
     res.send(
       '<html><head><title>Booking Cancelled</title></head><body>' +
       '<h1>Booking Cancelled</h1>' +
@@ -1305,12 +1338,15 @@ app.get('/api/bookings/auto', (req, res) => {
       } catch (err) {
         console.error('Failed to generate iCalendar attachment:', err);
       }
+      // Fire and forget confirmation email; log any failures
       sendEmail(
         emailNormalized,
         'Booking Confirmation',
         confirmationMessage,
         attachments
-      );
+      ).catch(err => {
+        console.error('Failed to send booking confirmation:', err);
+      });
       return res.json({ id, spaceName: space.name });
     }
   }
@@ -1928,7 +1964,10 @@ app.post('/api/request-verification', (req, res) => {
   const message =
     `Please verify your email address by clicking the following link:\n\n${verifyLink}\n\n` +
     `Once verified, you will be able to book spaces on the booking site.`;
-  sendEmail(emailNormalized, 'Email Verification', message);
+  // Fire and forget verification email; log any failures
+  sendEmail(emailNormalized, 'Email Verification', message).catch(err => {
+    console.error('Failed to send verification email:', err);
+  });
   res.json({ ok: true });
 });
 
