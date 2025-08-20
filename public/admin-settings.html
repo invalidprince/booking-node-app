@@ -497,8 +497,16 @@
       tbody.innerHTML = '';
       admins.forEach(a => {
         const tr = document.createElement('tr');
-        const role = a.role || 'admin';
-        tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
+        // Normalise role and capitalise first letter for display
+        const role = (a.role || 'admin').toLowerCase();
+        const displayRole = role.charAt(0).toUpperCase() + role.slice(1);
+        /*
+         * Bind an inline onclick handler to each Delete button instead of relying on
+         * event delegation. This ensures the delete handler is always bound even
+         * if the table is recreated or event listeners are not attached.
+         */
+        tr.innerHTML = `<td>${a.username}</td><td>${displayRole}</td><td>` +
+                       `<button onclick="deleteAdmin('${a.id}')">Delete</button></td>`;
         tbody.appendChild(tr);
       });
     }
@@ -532,6 +540,28 @@
         alert('Failed to create admin');
       }
     }
+
+    /**
+     * Delete an admin user by id. Only users with owner or superadmin roles can
+     * perform this action. On success or failure, reload the admin list to
+     * reflect the latest state. Show any returned error message to the user.
+     */
+    async function deleteAdmin(id) {
+      try {
+        const res = await fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' }));
+        if (res.ok) {
+          await loadAdmins();
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Failed to delete admin' }));
+          alert(err.error || 'Failed to delete admin');
+          await loadAdmins();
+        }
+      } catch (err) {
+        console.error(err);
+        alert('Failed to delete admin');
+        await loadAdmins();
+      }
+    }
     // Load kiosk tokens from the server and render into the table
     async function loadKioskTokens() {
       const tableBody = document.querySelector('#kioskTokensTable tbody');
@@ -543,7 +573,14 @@
         tableBody.innerHTML = '';
         tokens.forEach(t => {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td><td><button data-id="${t.id}" class="delKiosk">Revoke</button></td>`;
+          /*
+           * Bind an inline onclick handler on the revoke button instead of
+           * relying on event delegation. This ensures the revoke action is
+           * always triggered even if event listeners are not attached or
+           * removed.
+           */
+          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td>` +
+                         `<td><button onclick="revokeKioskToken('${t.id}')">Revoke</button></td>`;
           tableBody.appendChild(tr);
         });
       } catch (err) {
