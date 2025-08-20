@@ -102,12 +102,39 @@
       if (el && typeof el.addEventListener === 'function') el.addEventListener(event, handler);
     }
     function ensureSuperAdminIfNeeded(){
-      const role = localStorage.getItem('adminRole') || 'admin';
+      // On the settings page we allow any authenticated admin role.  The
+      // original implementation redirected non‑superadmin users back to
+      // admin.html, which resulted in a confusing re‑login loop for
+      // legitimate admin users.  Simply bail out if there is no token and
+      // otherwise do nothing.  Additional role checks can be added here
+      // if more granular access control is needed in the future.
       const token = localStorage.getItem('adminToken') || '';
-      if (!token) return; // login flow will show app after auth
-      if (true && role !== 'superadmin') {
-        window.location.href = '/admin.html';
+      if (!token) return;
+    }
+    function updateSettingsLinkIfNeeded(){
+      const right = document.getElementById('rightActions');
+      if (!right) return;
+      right.innerHTML = '';
+      const role = localStorage.getItem('adminRole') || 'admin';
+      if (!true && role === 'superadmin'){
+        const a = document.createElement('a');
+        a.href = '/admin-settings.html';
+        a.title = 'Settings';
+        a.textContent = '⚙️ Settings';
+        a.style.textDecoration = 'none';
+        a.style.fontSize = '14px';
+        right.appendChild(a);
       }
+    }
+    // ---- end utilities ----
+    
+    
+    // ---- injected utilities for split pages ----
+    function ensureSuperAdminIfNeeded(){
+      // See earlier definition for explanation.  Permit any role when
+      // authenticated by simply returning if there is no token.
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return;
     }
     function updateSettingsLinkIfNeeded(){
       const right = document.getElementById('rightActions');
@@ -133,6 +160,22 @@
       return opts;
     }
 
+    // Logout helper for the settings page. Without defining a logout
+    // function the click handler bound to the logout button would throw
+    // a reference error when invoked, halting execution of subsequent
+    // logic (like loading spaces, admins and kiosk tokens). Clearing the
+    // token and role from localStorage ensures a clean logout state.
+    function logout() {
+      try {
+        localStorage.removeItem('adminToken');
+        localStorage.removeItem('adminRole');
+        token = '';
+      } catch (_) {
+        // ignore storage errors
+      }
+      window.location.href = 'index.html';
+    }
+
     // Accept an optional event parameter so that we can prevent default behaviour.
     async function login(evt) {
       if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
@@ -154,8 +197,11 @@
           token = data.token;
           localStorage.setItem('adminToken', token);
           if (data && data.role) localStorage.setItem('adminRole', data.role);
+          if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
           updateSettingsLinkIfNeeded();
           ensureSuperAdminIfNeeded();
           await refreshAll();
@@ -312,15 +358,23 @@
           <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
         tbody.appendChild(tr);
       });
-      // Populate booking space selector
+      // Populate booking space selector only if it exists on this page.  The
+      // settings page does not include a booking form, so the element
+      // `bSpace` will be null.  Attempting to dereference it would throw a
+      // TypeError and prevent any subsequent code from running (including
+      // loading spaces, admins and kiosks), which was the primary reason
+      // spaces were not displayed previously.  Guard against a missing
+      // element and skip population in that case.
       const sSel = document.getElementById('bSpace');
-      sSel.innerHTML = '';
-      spaces.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.name;
-        sSel.appendChild(opt);
-      });
+      if (sSel) {
+        sSel.innerHTML = '';
+        spaces.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          sSel.appendChild(opt);
+        });
+      }
     }
 
     async function addSpace() {
@@ -671,6 +725,25 @@
     document.addEventListener('DOMContentLoaded', () => {
       updateSettingsLinkIfNeeded();
       ensureSuperAdminIfNeeded();
+      // Safe bindings
+      (function(){
+        function on(id, event, handler){
+          const el = document.getElementById(id);
+          if (el && el.addEventListener) el.addEventListener(event, handler);
+        }
+        on('loginBtn','click', login);
+        on('logoutBtn','click', logout);
+        on('addSpaceBtn','click', addSpace);
+        on('addAdminBtn','click', addAdmin);
+        on('generateKioskBtn','click', generateKioskToken);
+        on('addBookingBtn','click', addBooking);
+        on('loadAnalyticsBtn','click', loadAnalytics);
+        on('loadSummaryBtn','click', loadSummary);
+        on('downloadCsvBtn','click', downloadCsv);
+      })();
+
+      updateSettingsLinkIfNeeded();
+      ensureSuperAdminIfNeeded();
       on('loginBtn','click', login);
       on('logoutBtn','click', logout);
       on('addSpaceBtn','click', addSpace);
@@ -715,16 +788,18 @@
         document.getElementById('app').classList.remove('hidden');
           updateSettingsLinkIfNeeded();
           ensureSuperAdminIfNeeded();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
         refreshAll();
       }
 
       // Event bindings
       document.getElementById('loginBtn').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', () => {
-        localStorage.removeItem('adminToken');
-        token = '';
-        location.href = 'index.html';
-      });
+      // When the logout button is clicked, call our logout helper.  The
+      // previous inline handler only cleared the token and did not reset
+      // the stored role; using the helper keeps behaviour consistent across
+      // pages.
+      document.getElementById('logoutBtn').addEventListener('click', logout);
       document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
       document.getElementById('spacesTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delSpace')) {
