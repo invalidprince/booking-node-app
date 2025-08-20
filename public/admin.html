@@ -142,11 +142,54 @@
     }
     // ---- end utilities ----
     
+    
+    // ---- injected utilities for split pages ----
+    function ensureSuperAdminIfNeeded(){
+      const role = localStorage.getItem('adminRole') || 'admin';
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return;
+      if (false && role !== 'superadmin') { window.location.href = '/admin.html'; }
+    }
+    function updateSettingsLinkIfNeeded(){
+      const right = document.getElementById('rightActions');
+      if (!right) return;
+      right.innerHTML = '';
+      const role = localStorage.getItem('adminRole') || 'admin';
+      if (!false && role === 'superadmin'){
+        const a = document.createElement('a');
+        a.href = '/admin-settings.html';
+        a.title = 'Settings';
+        a.textContent = '⚙️ Settings';
+        a.style.textDecoration = 'none';
+        a.style.fontSize = '14px';
+        right.appendChild(a);
+      }
+    }
+    // ---- end utilities ----
+    
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
       opts.headers['Authorization'] = 'Bearer ' + token;
       return opts;
+    }
+
+    // Logout helper. Removes the stored admin token and returns the user to
+    // the public booking page. Without this function the page attempted to
+    // bind a click handler to an undefined `logout` symbol, causing the
+    // remainder of the admin script to abort before any of the booking
+    // functionality could initialise. See the bottom of this file where
+    // `logoutBtn` is wired up.
+    function logout() {
+      try {
+        localStorage.removeItem('adminToken');
+        localStorage.removeItem('adminRole');
+        token = '';
+      } catch (_) {
+        // ignore storage errors
+      }
+      // Navigate back to the main page
+      window.location.href = 'index.html';
     }
 
     // Accept an optional event parameter so that we can prevent default behaviour.
@@ -170,8 +213,11 @@
           token = data.token;
           localStorage.setItem('adminToken', token);
           if (data && data.role) localStorage.setItem('adminRole', data.role);
+          if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
           updateSettingsLinkIfNeeded();
           ensureSuperAdminIfNeeded();
           await refreshAll();
@@ -687,6 +733,25 @@
     document.addEventListener('DOMContentLoaded', () => {
       updateSettingsLinkIfNeeded();
       ensureSuperAdminIfNeeded();
+      // Safe bindings
+      (function(){
+        function on(id, event, handler){
+          const el = document.getElementById(id);
+          if (el && el.addEventListener) el.addEventListener(event, handler);
+        }
+        on('loginBtn','click', login);
+        on('logoutBtn','click', logout);
+        on('addSpaceBtn','click', addSpace);
+        on('addAdminBtn','click', addAdmin);
+        on('generateKioskBtn','click', generateKioskToken);
+        on('addBookingBtn','click', addBooking);
+        on('loadAnalyticsBtn','click', loadAnalytics);
+        on('loadSummaryBtn','click', loadSummary);
+        on('downloadCsvBtn','click', downloadCsv);
+      })();
+
+      updateSettingsLinkIfNeeded();
+      ensureSuperAdminIfNeeded();
       on('loginBtn','click', login);
       on('logoutBtn','click', logout);
       on('addSpaceBtn','click', addSpace);
@@ -731,16 +796,16 @@
         document.getElementById('app').classList.remove('hidden');
           updateSettingsLinkIfNeeded();
           ensureSuperAdminIfNeeded();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
         refreshAll();
       }
 
       // Event bindings
       document.getElementById('loginBtn').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', () => {
-        localStorage.removeItem('adminToken');
-        token = '';
-        location.href = 'index.html';
-      });
+      // Bind logout to our helper function.  This avoids undefined errors
+      // and clears both the adminToken and adminRole keys consistently.
+      document.getElementById('logoutBtn').addEventListener('click', logout);
       document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
       document.getElementById('spacesTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delSpace')) {
