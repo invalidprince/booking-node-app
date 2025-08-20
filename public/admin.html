@@ -234,7 +234,22 @@
       }
     }
 
-    async function refreshAll(){ await loadBookings(); }
+    // Refresh all admin data after login.  The original implementation only
+    // loaded bookings, which meant the space selector remained empty until
+    // a separate call to loadSpaces() was made.  Without an option selected
+    // the Add Booking form cannot be submitted.  Load spaces before
+    // bookings so the dropdown is populated.
+    async function refreshAll(){
+      try {
+        if (typeof loadSpaces === 'function') {
+          await loadSpaces();
+        }
+        await loadBookings();
+      } catch (e) {
+        console.error('refreshAll error', e);
+        await loadBookings();
+      }
+    }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
     function convertTo24h(str) {
