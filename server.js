@@ -1653,7 +1653,9 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
 // devices and codes. Because codes effectively authenticate kiosk
 // devices, they should be treated as secrets and only visible to admins.
 app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Permit superadmins to manage kiosk tokens as well.  Previously superadmins
+  // were excluded which prevented them from viewing tokens in the settings UI.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(kioskTokens);
@@ -1664,7 +1666,8 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // the kiosk device, while the code is shared with the device during
 // setup. The token remains valid until explicitly revoked by an admin.
 app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow superadmins to generate kiosk tokens in addition to owners and admins.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const id = uuidv4();
@@ -1679,7 +1682,9 @@ app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
 // does not remove the cookie from the client; instead the server simply
 // stops recognising the token.
 app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow superadmins to revoke kiosk tokens.  Without this, superadmins
+  // could not perform deletions in the admin settings page.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
