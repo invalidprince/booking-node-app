@@ -18,6 +18,11 @@
     .recurrence-controls label { margin-left: 4px; }
     /* Timepicker dropdown styling (copied from main booking page) */
     .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
+
+    /* Simple date picker dropdown for admin bookings.  It mirrors the custom time
+       picker styling and provides basic selects for month/day/year when the
+       native date input cannot be used. */
+    .datepicker-dropdown select { margin-right: 4px; padding: 4px; }
   </style>
 </head>
 <body>
@@ -37,7 +42,12 @@
       <div class="row">
         <input id="bName" placeholder="Name">
         <input id="bEmail" placeholder="Email">
-        <input id="bDate" type="date">
+        <!-- Use a text input for the booking date and wire up a simple date picker via JS.  A native
+             `<input type="date">` field would normally suffice, but on some platforms the
+             built‑in picker either fails to open or rejects keyboard input.  Making it read‑only
+             prevents the browser from treating it as a freeform text box and ensures the custom
+             dropdown is always used. -->
+        <input id="bDate" type="text" placeholder="Date" readonly>
         <input id="bStart" placeholder="Start Time" readonly>
         <input id="bEnd" placeholder="End Time" readonly>
         <select id="bSpace"></select>
@@ -317,6 +327,90 @@
         container.style.top = `${rect.bottom + window.scrollY + 2}px`;
         container.style.display = 'block';
       });
+      document.addEventListener('click', (e) => {
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
+      });
+    }
+
+    // Create a simple date picker for inputs that should accept dates in YYYY-MM-DD
+    // format.  The native `<input type="date">` control is not reliable across
+    // all browsers or on remote sessions, so this helper shows a small dropdown
+    // with separate selects for month, day and year.  Selecting a date sets
+    // the corresponding text field's value (ISO format) and hides the picker.
+    function createDatePicker(inputId) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      // Container for the dropdown
+      const container = document.createElement('div');
+      container.className = 'datepicker-dropdown';
+      container.style.position = 'absolute';
+      container.style.display = 'none';
+      container.style.background = '#fff';
+      container.style.border = '1px solid #ccc';
+      container.style.padding = '6px';
+      container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+      container.style.zIndex = 1000;
+
+      // Month selector (1–12)
+      const monthSelect = document.createElement('select');
+      for (let m = 1; m <= 12; m++) {
+        const opt = document.createElement('option');
+        opt.value = m.toString().padStart(2, '0');
+        opt.textContent = opt.value;
+        monthSelect.appendChild(opt);
+      }
+
+      // Day selector (1–31).  We won't dynamically adjust day count per month; if
+      // the selected date does not exist (e.g. Feb 30) the server will reject
+      // it, but this still allows the admin to select any day quickly.
+      const daySelect = document.createElement('select');
+      for (let d = 1; d <= 31; d++) {
+        const opt = document.createElement('option');
+        opt.value = d.toString().padStart(2, '0');
+        opt.textContent = opt.value;
+        daySelect.appendChild(opt);
+      }
+
+      // Year selector.  Provide a range spanning from current year back one year
+      // and forward four years.  This should cover most booking windows but
+      // can be adjusted easily.
+      const yearSelect = document.createElement('select');
+      const currentYear = new Date().getFullYear();
+      for (let y = currentYear - 1; y <= currentYear + 4; y++) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (y === currentYear) opt.selected = true;
+        yearSelect.appendChild(opt);
+      }
+
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const y = yearSelect.value;
+        const m = monthSelect.value;
+        const d = daySelect.value;
+        input.value = `${y}-${m}-${d}`;
+        container.style.display = 'none';
+      };
+      container.appendChild(monthSelect);
+      container.appendChild(daySelect);
+      container.appendChild(yearSelect);
+      container.appendChild(setBtn);
+
+      document.body.appendChild(container);
+
+      input.addEventListener('focus', () => {
+        const rect = input.getBoundingClientRect();
+        container.style.left = `${rect.left + window.scrollX}px`;
+        container.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        container.style.display = 'block';
+      });
+      // Hide the picker when clicking outside of the input or the container
       document.addEventListener('click', (e) => {
         if (e.target !== input && !container.contains(e.target)) {
           container.style.display = 'none';
@@ -883,6 +977,9 @@
       // Initialise time pickers for start and end times only when inputs exist
       if (document.getElementById('bStart')) createTimePicker('bStart');
       if (document.getElementById('bEnd')) createTimePicker('bEnd');
+
+      // Initialise the custom date picker for bookings
+      if (document.getElementById('bDate')) createDatePicker('bDate');
 
       // Bind analytics & exports
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
