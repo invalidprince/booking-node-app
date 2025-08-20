@@ -473,7 +473,11 @@
     }
 
     async function loadSpaces() {
-      const res = await fetch('/api/spaces');
+      // Use authenticated headers when loading spaces. Without the auth header
+      // the server may return 401/403 and the dropdown remains empty. Passing
+      // the result of setAuthHeaders() will attach the Authorization header
+      // containing the current admin token. Note: GET is default.
+      const res = await fetch('/api/spaces', setAuthHeaders());
       const spaces = await res.json();
       const tbody = document.querySelector('#spacesTable tbody');
       tbody.innerHTML = '';
