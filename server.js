@@ -833,7 +833,19 @@ function adminAuth(req, res, next) {
   req.adminId = adminId;
   const admin = admins.find(a => a.id === adminId);
   req.admin = admin;
-  req.adminRole = admin && admin.role ? admin.role : 'admin';
+  // Assign a normalized role.  Some older deployments used a "super" or
+  // "superadmin" role name which was not recognised by the access control
+  // checks throughout the server (e.g. analytics and kiosk endpoints
+  // explicitly check for 'owner', 'admin' or 'analyst').  When an admin has
+  // one of these legacy roles we treat them as an owner.  Otherwise fall
+  // back to the stored role or 'admin' by default.
+  let role = admin && admin.role ? admin.role : 'admin';
+  if (role && typeof role === 'string') {
+    const r = role.toLowerCase();
+    if (r === 'super' || r === 'superadmin') role = 'owner';
+    else role = role; // leave unchanged
+  }
+  req.adminRole = role;
   next();
 }
 
