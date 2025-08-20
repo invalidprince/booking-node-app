@@ -818,17 +818,6 @@ function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recu
  * @param {string} method iCalendar method (REQUEST or CANCEL)
  * @param {boolean} cancelled Whether the event should include a cancelled status
  * @returns {string} iCalendar formatted string
- */
-/* iCalendar generation removed by request */
-  lines.push(`DESCRIPTION:Office booking for ${spaceName}`);
-  if (cancelled) {
-    lines.push('STATUS:CANCELLED');
-    lines.push('SEQUENCE:1');
-  }
-  lines.push('END:VEVENT');
-  lines.push('END:VCALENDAR');
-  return lines.join('\r\n');
-}
 
 function adminAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -850,6 +839,7 @@ function adminAuth(req, res, next) {
 // ----- API routes -----------------------------------------------------------
 
 /**
+/* REMOVED REMINDER EMAIL LOGIC
  * Send day‑before reminder emails for tomorrow's bookings.
  *
  * This helper function enumerates all bookings scheduled for the next
@@ -860,33 +850,45 @@ function adminAuth(req, res, next) {
  * cancellation link if APP_BASE_URL is configured.  iCalendar attachments
  * are not included in reminders.
  */
-/* Email reminder feature removed by request */
-
-// -----------------------------------------------------------------------------
-// Reminder endpoint
-//
-// A protected endpoint used by automated tasks (e.g. Render Cron Jobs) to
-// trigger the day‑before reminder emails.  To prevent unauthorised
-// invocation, set the REMINDER_TOKEN environment variable to a secret string
-// and pass it as the `token` query parameter.  If no REMINDER_TOKEN is
-// defined, the endpoint will run without authentication.
-/* /api/reminders/daily removed by request */
-
-});
-
-// Admin login
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  const admin = admins.find(a => a.username === username);
-  // If admin found, verify password using hashed or plain comparison
-  if (!admin || !verifyPassword(password, admin)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
-  }
-  // If admin has plain password but no hash, upgrade to hashed credentials
-  if (!admin.passwordHash || !admin.salt) {
-    const creds = hashPassword(password);
-    admin.passwordHash = creds.hash;
-    admin.salt = creds.salt;
+async function sendDayBeforeReminders() {
+  // Determine tomorrow's date in local time.  We use a date constructed
+  // from the current time components to avoid timezone drift when
+  // converting to ISO strings.  Note: this code runs in the server's
+  // timezone (set via environment or container) so schedule your cron
+  // accordingly if you need a specific timezone.
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const dateStr = tomorrow.toISOString().split('T')[0];
+  // Iterate over bookings and send reminders for those that occur tomorrow
+  for (const b of bookings) {
+    // Skip cancelled bookings (undefined treated as false)
+    if (b.cancelled) continue;
+    // Does this booking occur on tomorrow's date?  For recurring bookings
+    // check the recurrence rule.
+    const occurs = b.date === dateStr || isRecurringOnDate(dateStr, b.recurring);
+    if (!occurs) continue;
+    // Look up the space name
+    const space = spaces.find(s => s.id === b.spaceId);
+    const spaceName = space ? space.name : 'a space';
+    // Build cancellation link if configured
+    let cancelLink = '';
+    if (APP_BASE_URL) {
+      cancelLink = `${APP_BASE_URL}/cancel/${b.id}`;
+    }
+    const messageLines = [];
+    messageLines.push(`This is a reminder for your upcoming booking.`);
+    messageLines.push(``);
+    messageLines.push(`Space: ${spaceName}`);
+    messageLines.push(`Date: ${dateStr}`);
+    messageLines.push(`Time: ${to12Hour(b.startTime)} – ${to12Hour(b.endTime)}`);
+    if (cancelLink) {
+      messageLines.push('');
+      messageLines.push(`If you need to cancel, please visit the following link:`);
+      messageLines.push(cancelLink);
+    }
+    const message = messageLines.join('\n');
+    try {
+      // Use the booking's stored email; normalise to lower case for consistency
     delete admin.password;
     saveData();
   }
@@ -933,6 +935,7 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 });
 
 // Bookings endpoints
+*/
 app.get('/api/bookings', adminAuth, (req, res) => {
   // Only owners and admins can list all bookings
   if (!['owner','superadmin','admin'].includes(req.adminRole)) {
@@ -1080,14 +1083,6 @@ app.post('/api/bookings', (req, res) => {
   bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec, checkedIn: false });
   // Persist changes
   saveData();
-  // Build a cancellation link. If APP_BASE_URL is set, use it; otherwise omit the URL.
-  let cancelLink = '';
-  if (APP_BASE_URL) {
-    cancelLink = `${APP_BASE_URL}/cancel/${id}`;
-  }
-  // Create plain text confirmation message
-  // Email confirmations removed by request
-  });
   res.json({ id });
 });
 
@@ -1102,8 +1097,8 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
     const space = spaces.find(s => s.id === removed.spaceId);
-    // Email notifications removed by request
-saveData();
+    // Persist changes
+    saveData();
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Booking not found' });
@@ -1118,18 +1113,6 @@ app.get('/cancel/:id', (req, res) => {
   const index = bookings.findIndex(b => b.id === id);
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
-    saveData();
-    const space = spaces.find(s => s.id === removed.spaceId);
-    // Send cancellation email to the user with iCalendar cancel attachment
-    const cancelMsg = `Your booking has been cancelled.`;
-  // Email notifications removed by request
-res.send(
-      '<html><head><title>Booking Cancelled</title></head><body>' +
-      '<h1>Booking Cancelled</h1>' +
-      '<p>Your booking has been cancelled successfully.</p>' +
-      '</body></html>'
-    );
-  } else {
     res.status(404).send(
       '<html><head><title>Booking Not Found</title></head><body>' +
       '<h1>Booking Not Found</h1>' +
@@ -1177,13 +1160,6 @@ app.get('/api/bookings/auto', (req, res) => {
       bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false, checkedIn: false });
       // Persist immediately so that cancellation link works even if the process restarts
       saveData();
-      // Construct cancellation link
-      let cancelLink = '';
-      if (APP_BASE_URL) {
-        cancelLink = `${APP_BASE_URL}/cancel/${id}`;
-      }
-      // Email confirmations removed by request
-      });
       return res.json({ id, spaceName: space.name });
     }
   }
