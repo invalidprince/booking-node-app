@@ -819,36 +819,7 @@ function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recu
  * @param {boolean} cancelled Whether the event should include a cancelled status
  * @returns {string} iCalendar formatted string
  */
-function generateICS(booking, spaceName, method = 'REQUEST', cancelled = false) {
-  const { id, date, startTime, endTime, name, email } = booking;
-  // Parse date and times into components
-  const [yStr, mStr, dStr] = date.split('-');
-  const [startH, startM] = startTime.split(':').map(n => parseInt(n, 10));
-  const [endH, endM] = endTime.split(':').map(n => parseInt(n, 10));
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-  // Build timestamps in format YYYYMMDDTHHMMSS
-  const dtStart = `${yStr}${mStr}${dStr}T${String(startH).padStart(2, '0')}${String(startM).padStart(2, '0')}00`;
-  const dtEnd = `${yStr}${mStr}${dStr}T${String(endH).padStart(2, '0')}${String(endM).padStart(2, '0')}00`;
-  const dtStamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
-  const lines = [];
-  lines.push('BEGIN:VCALENDAR');
-  lines.push('VERSION:2.0');
-  lines.push('PRODID:-//Office Booking//EN');
-  lines.push(`METHOD:${method}`);
-  lines.push('BEGIN:VEVENT');
-  lines.push(`UID:${id}@booking`);
-  lines.push(`DTSTAMP:${dtStamp}`);
-  lines.push(`DTSTART:${dtStart}`);
-  lines.push(`DTEND:${dtEnd}`);
-  lines.push(`SUMMARY:Booking for ${spaceName}`);
-  lines.push(`LOCATION:${spaceName}`);
-  if (name && email) {
-    // RFC5545 requires escaping commas and semicolons in CN
-    const cn = String(name).replace(/[,;]/g, '\\$&');
-    lines.push(`ORGANIZER;CN=${cn}:MAILTO:${email}`);
-  }
+/* iCalendar generation removed by request */
   lines.push(`DESCRIPTION:Office booking for ${spaceName}`);
   if (cancelled) {
     lines.push('STATUS:CANCELLED');
@@ -889,53 +860,7 @@ function adminAuth(req, res, next) {
  * cancellation link if APP_BASE_URL is configured.  iCalendar attachments
  * are not included in reminders.
  */
-async function sendDayBeforeReminders() {
-  // Determine tomorrow's date in local time.  We use a date constructed
-  // from the current time components to avoid timezone drift when
-  // converting to ISO strings.  Note: this code runs in the server's
-  // timezone (set via environment or container) so schedule your cron
-  // accordingly if you need a specific timezone.
-  const now = new Date();
-  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  const dateStr = tomorrow.toISOString().split('T')[0];
-  // Iterate over bookings and send reminders for those that occur tomorrow
-  for (const b of bookings) {
-    // Skip cancelled bookings (undefined treated as false)
-    if (b.cancelled) continue;
-    // Does this booking occur on tomorrow's date?  For recurring bookings
-    // check the recurrence rule.
-    const occurs = b.date === dateStr || isRecurringOnDate(dateStr, b.recurring);
-    if (!occurs) continue;
-    // Look up the space name
-    const space = spaces.find(s => s.id === b.spaceId);
-    const spaceName = space ? space.name : 'a space';
-    // Build cancellation link if configured
-    let cancelLink = '';
-    if (APP_BASE_URL) {
-      cancelLink = `${APP_BASE_URL}/cancel/${b.id}`;
-    }
-    const messageLines = [];
-    messageLines.push(`This is a reminder for your upcoming booking.`);
-    messageLines.push(``);
-    messageLines.push(`Space: ${spaceName}`);
-    messageLines.push(`Date: ${dateStr}`);
-    messageLines.push(`Time: ${to12Hour(b.startTime)} – ${to12Hour(b.endTime)}`);
-    if (cancelLink) {
-      messageLines.push('');
-      messageLines.push(`If you need to cancel, please visit the following link:`);
-      messageLines.push(cancelLink);
-    }
-    const message = messageLines.join('\n');
-    try {
-      // Use the booking's stored email; normalise to lower case for consistency
-      const toEmail = String(b.email || '').trim().toLowerCase();
-      if (!toEmail) continue;
-      await sendEmail(toEmail, 'Upcoming Booking Reminder', message, []);
-    } catch (err) {
-      console.error('Failed to send reminder email:', err);
-    }
-  }
-}
+/* Email reminder feature removed by request */
 
 // -----------------------------------------------------------------------------
 // Reminder endpoint
@@ -945,22 +870,8 @@ async function sendDayBeforeReminders() {
 // invocation, set the REMINDER_TOKEN environment variable to a secret string
 // and pass it as the `token` query parameter.  If no REMINDER_TOKEN is
 // defined, the endpoint will run without authentication.
-app.get('/api/reminders/daily', (req, res) => {
-  const secret = process.env.REMINDER_TOKEN || process.env.REMINDER_SECRET;
-  if (secret) {
-    const provided = req.query.token;
-    if (!provided || provided !== secret) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
-  }
-  sendDayBeforeReminders()
-    .then(() => {
-      res.json({ ok: true });
-    })
-    .catch(err => {
-      console.error('Error running reminders:', err);
-      res.status(500).json({ error: 'Failed to send reminders' });
-    });
+/* /api/reminders/daily removed by request */
+
 });
 
 // Admin login
@@ -1175,26 +1086,7 @@ app.post('/api/bookings', (req, res) => {
     cancelLink = `${APP_BASE_URL}/cancel/${id}`;
   }
   // Create plain text confirmation message
-  const confirmationMessage =
-    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
-    (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
-  // Generate an iCalendar attachment for the booking (first occurrence only)
-  let attachments = [];
-  try {
-    const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
-  } catch (err) {
-    console.error('Failed to generate iCalendar attachment:', err);
-  }
-  // Dispatch a booking confirmation email.  Fire and forget to avoid
-  // delaying the HTTP response.  Any errors will be logged to the console.
-  sendEmail(
-    emailNormalized,
-    'Booking Confirmation',
-    confirmationMessage,
-    attachments
-  ).catch(err => {
-    console.error('Failed to send booking confirmation:', err);
+  // Email confirmations removed by request
   });
   res.json({ id });
 });
@@ -1210,31 +1102,8 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
     const space = spaces.find(s => s.id === removed.spaceId);
-    // Build cancellation email and iCalendar cancel attachment
-    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
-    let attachments = [];
-    try {
-      const icsCancel = generateICS(
-        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
-        space ? space.name : 'a space',
-        'CANCEL',
-        true
-      );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
-    } catch (err) {
-      console.error('Failed to generate cancellation iCalendar attachment:', err);
-    }
-    // Fire and forget cancellation email; log any failures
-    sendEmail(
-      removed.email,
-      'Booking Cancelled',
-      cancelMsg,
-      attachments
-    ).catch(err => {
-      console.error('Failed to send cancellation email:', err);
-    });
-    // Persist changes
-    saveData();
+    // Email notifications removed by request
+saveData();
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Booking not found' });
@@ -1252,24 +1121,9 @@ app.get('/cancel/:id', (req, res) => {
     saveData();
     const space = spaces.find(s => s.id === removed.spaceId);
     // Send cancellation email to the user with iCalendar cancel attachment
-    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
-    let attachments = [];
-    try {
-      const icsCancel = generateICS(
-        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
-        space ? space.name : 'a space',
-        'CANCEL',
-        true
-      );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
-    } catch (err) {
-      console.error('Failed to generate cancellation iCalendar attachment:', err);
-    }
-    // Fire and forget cancellation email; log any errors
-    sendEmail(removed.email, 'Booking Cancelled', cancelMsg, attachments).catch(err => {
-      console.error('Failed to send cancellation email:', err);
-    });
-    res.send(
+    const cancelMsg = `Your booking has been cancelled.`;
+  // Email notifications removed by request
+res.send(
       '<html><head><title>Booking Cancelled</title></head><body>' +
       '<h1>Booking Cancelled</h1>' +
       '<p>Your booking has been cancelled successfully.</p>' +
@@ -1328,24 +1182,7 @@ app.get('/api/bookings/auto', (req, res) => {
       if (APP_BASE_URL) {
         cancelLink = `${APP_BASE_URL}/cancel/${id}`;
       }
-      const confirmationMessage =
-        `Your booking for ${space.name} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
-        (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
-      let attachments = [];
-      try {
-        const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
-      } catch (err) {
-        console.error('Failed to generate iCalendar attachment:', err);
-      }
-      // Fire and forget confirmation email; log any failures
-      sendEmail(
-        emailNormalized,
-        'Booking Confirmation',
-        confirmationMessage,
-        attachments
-      ).catch(err => {
-        console.error('Failed to send booking confirmation:', err);
+      // Email confirmations removed by request
       });
       return res.json({ id, spaceName: space.name });
     }
