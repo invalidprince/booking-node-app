@@ -818,6 +818,7 @@ function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recu
  * @param {string} method iCalendar method (REQUEST or CANCEL)
  * @param {boolean} cancelled Whether the event should include a cancelled status
  * @returns {string} iCalendar formatted string
+*/
 
 function adminAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -896,7 +897,6 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 });
 
 // Bookings endpoints
-*/
 app.get('/api/bookings', adminAuth, (req, res) => {
   // Only owners and admins can list all bookings
   if (!['owner','superadmin','admin'].includes(req.adminRole)) {
