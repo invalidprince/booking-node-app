@@ -27,11 +27,8 @@
     <div class="row">
       <input id="username" placeholder="Username (admin@example.com)">
       <input id="password" placeholder="Password (admin123)" type="password">
-          <!-- Ensure the login button does not trigger a form submission and page reload
-               by explicitly setting type="button". Without this, some browsers
-               treat it as a submit button which causes the page to reload and
-               break the login flow. -->
-          <button id="loginBtn" type="button">Login</button>
+      <!-- Prevent accidental form-submit reloads -->
+      <button id="loginBtn" type="button">Login</button>
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
@@ -184,23 +181,14 @@
       return opts;
     }
 
-    // Accept an optional event parameter so that we can prevent the default
-    // behaviour when the login button is inside a form.  Without calling
-    // preventDefault() some browsers will reload the page on click because
-    // buttons default to type="submit" if not specified.
+    // Accept an optional event parameter so that we can prevent default behaviour.
     async function login(evt) {
-      if (evt && typeof evt.preventDefault === 'function') {
-        evt.preventDefault();
-      }
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
       const btn = document.getElementById('loginBtn');
       const status = document.getElementById('loginStatus');
-      // Reset any previous error message and disable the button while the
-      // request is in flight.  This prevents duplicate submissions.
       status.textContent = '';
       btn.disabled = true;
       try {
-        // Capture the username/password from the form fields.  Trim to
-        // avoid accidental whitespace causing authentication failures.
         const username = document.getElementById('username').value.trim();
         const password = document.getElementById('password').value.trim();
         const res = await fetch('/api/login', {
@@ -208,43 +196,23 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username, password })
         });
-        // Always attempt to parse the JSON response; if parsing fails
-        // return an empty object so that optional chaining below does not
-        // throw.
-        // Attempt to parse the JSON response.  Use a cloned response so that
-        // the original body remains readable in case we need the raw text.
         let data = {};
-        try {
-          data = await res.clone().json();
-        } catch (_) {
-          // Swallow JSON parse errors – data will remain an empty object.
-        }
+        try { data = await res.clone().json(); } catch (_) {}
         if (res.ok && data && data.token) {
-          // Persist the returned token to localStorage for subsequent requests.
           token = data.token;
           localStorage.setItem('adminToken', token);
-          // Hide the login card and show the main admin UI.
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
-          // Refresh all data in the admin UI.
           await refreshAll();
         } else {
-          // When the response is not OK or no token is returned, display a more
-          // specific error message based on status.  Fallback to the server
-          // error message or a generic message if none provided.
-          if (res.status === 401) {
-            status.textContent = data.error || 'Invalid credentials';
-          } else if (res.status === 403) {
-            status.textContent = data.error || 'Access forbidden';
-          } else {
-            status.textContent = (data && data.error) || `Login failed (HTTP ${res.status})`;
-          }
+          if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
+          else if (res.status === 403) status.textContent = data.error || 'Access forbidden';
+          else status.textContent = (data && data.error) || `Login failed (HTTP ${res.status})`;
         }
       } catch (e) {
         console.error('Login error', e);
         status.textContent = 'Login error. See console for details.';
       } finally {
-        // Re-enable the button regardless of outcome.
         btn.disabled = false;
       }
     }
@@ -352,7 +320,7 @@
           return `Monthly – ${ordinal(rec.dayOfMonth)}`;
         }
         if (rec.nth !== undefined && rec.weekday !== undefined) {
-          return `Monthly – ${ordinalNth(rec.nth)} ${weekdayName(rec.weekday)}`;
+          return `Monthly – ${ordinal(rec.nth)} ${weekdayName(rec.weekday)}`;
         }
       }
       return '';
@@ -370,13 +338,6 @@
       const s = ['th','st','nd','rd'];
       const v = i % 100;
       return i + (s[(v - 20) % 10] || s[v] || s[0]);
-    }
-
-    function ordinalNth(n) {
-      const i = parseInt(n, 10);
-      const ord = ordinal(i);
-      // Remove the numeric part, leave only the ordinal indicator
-      return ord;
     }
 
     // Format date as "Weekday, MM/DD/YYYY"
@@ -462,42 +423,60 @@
         });
     }
 
-    // Hook up pagination buttons after DOM is ready
-    document.addEventListener('DOMContentLoaded', () => {
-    // Global error banner
-    window.addEventListener('error', (e) => {
-      const div = document.getElementById('loginStatus');
-      if (div && !div.textContent) {
-        div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
-      }
-    });
+    // NEW: proper async addBooking implementation (fixes stray awaits)
+    async function addBooking() {
+      try {
+        const name = document.getElementById('bName').value.trim();
+        const email = document.getElementById('bEmail').value.trim();
+        const date = document.getElementById('bDate').value;
+        const startStr = document.getElementById('bStart').value;
+        const endStr = document.getElementById('bEnd').value;
+        const spaceId = document.getElementById('bSpace').value;
 
-      const prevBtn = document.getElementById('prevPageBtn');
-      const nextBtn = document.getElementById('nextPageBtn');
-      if (prevBtn && nextBtn) {
-        prevBtn.addEventListener('click', () => {
-          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
-          const ps = window._pageState;
-          ps.offset = Math.max(0, ps.offset - ps.limit);
-          loadBookings();
-        });
-        nextBtn.addEventListener('click', () => {
-          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
-          const ps = window._pageState;
-          if (ps.offset + ps.limit < ps.total) {
-            ps.offset = ps.offset + ps.limit;
-            loadBookings();
-          }
-        });
-      }
-    });
-      body.recurring = recurring;
-      const res = await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.ok) {
-        await loadBookings();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Booking failed' }));
-        alert(err.error || 'Booking failed');
+        if (!name || !email || !date || !startStr || !endStr || !spaceId) {
+          alert('Please fill out name, email, date, start, end, and space.');
+          return;
+        }
+
+        const startTime = convertTo24h(startStr);
+        const endTime = convertTo24h(endStr);
+
+        const body = { name, email, date, startTime, endTime, spaceId };
+
+        // Recurrence payload
+        const type = document.getElementById('bRecurrenceType').value;
+        if (type === 'day') {
+          const day = parseInt(document.getElementById('bRecurrenceDay').value, 10);
+          if (!isNaN(day)) body.recurrence = { frequency: 'monthly', dayOfMonth: day };
+        } else if (type === 'weekday') {
+          const nth = parseInt(document.getElementById('bRecurrenceNth').value, 10);
+          const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
+          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency: 'monthly', nth, weekday };
+        } else if (type === 'weekly') {
+          const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
+          if (!isNaN(weekday)) body.recurrence = { frequency: 'weekly', weekday };
+        }
+
+        const res = await fetch('/api/bookings', setAuthHeaders({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }));
+
+        if (res.ok) {
+          await loadBookings();
+          // optional: clear inputs
+          // document.getElementById('bName').value = '';
+          // document.getElementById('bEmail').value = '';
+          // document.getElementById('bStart').value = '';
+          // document.getElementById('bEnd').value = '';
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Booking failed' }));
+          alert(err.error || 'Booking failed');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Booking failed');
       }
     }
 
@@ -513,7 +492,6 @@
       tbody.innerHTML = '';
       admins.forEach(a => {
         const tr = document.createElement('tr');
-        // Show username and role (defaulting to 'admin' if missing)
         const role = a.role || 'admin';
         tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
         tbody.appendChild(tr);
@@ -548,7 +526,6 @@
         return;
       }
       const data = await res.json();
-      // Show the token code to the admin so it can be provisioned on a kiosk device
       const display = document.getElementById('newKioskToken');
       display.textContent = `Token code: ${data.code}`;
       await loadKioskTokens();
@@ -595,7 +572,6 @@
       const tbody = document.createElement('tbody');
       data.forEach(row => {
         const tr = document.createElement('tr');
-        // Convert dayOfWeekCounts object into a human‑readable string like "Mon: 4, Tue: 2"
         let daysStr = '';
         if (row.dayOfWeekCounts) {
           const parts = [];
@@ -632,7 +608,6 @@
         container.textContent = 'No summary available.';
         return;
       }
-      // Build a table with monthly metrics and utilisation
       const { monthlyBookings, monthlyCheckInHours, monthlyNoShowHours, utilisation } = data;
       const keys = Array.from(new Set([
         ...Object.keys(monthlyBookings || {}),
@@ -658,7 +633,6 @@
       });
       table.appendChild(tbody);
       container.appendChild(table);
-      // Display utilisation below the table
       const utilDiv = document.createElement('div');
       utilDiv.style.marginTop = '8px';
       utilDiv.textContent = `Utilisation: ${utilisation}%`;
@@ -689,24 +663,6 @@
       document.body.removeChild(link);
     }
 
-    async function addAdmin() {
-      const username = document.getElementById('aUser').value.trim();
-      const password = document.getElementById('aPass').value.trim();
-      const role = document.getElementById('aRole') ? document.getElementById('aRole').value : 'admin';
-      const body = { username, password, role };
-      const res = await fetch('/api/admins', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
-      if (res.ok) {
-        // Clear inputs and reload list
-        document.getElementById('aUser').value = '';
-        document.getElementById('aPass').value = '';
-        if (document.getElementById('aRole')) document.getElementById('aRole').value = 'admin';
-        await loadAdmins();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Failed to add admin' }));
-        alert(err.error || 'Failed to add admin');
-      }
-    }
-
     // Show/hide recurrence inputs depending on selected type
     function updateRecurrenceFields() {
       const type = document.getElementById('bRecurrenceType').value;
@@ -722,7 +678,6 @@
         nthSelect.classList.remove('hidden');
         weekdaySelect.classList.remove('hidden');
       } else if (type === 'weekly') {
-        // Weekly recurrence: show weekday only
         dayInput.classList.add('hidden');
         nthSelect.classList.add('hidden');
         weekdaySelect.classList.remove('hidden');
@@ -733,25 +688,48 @@
       }
     }
 
+    // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
-    // Global error banner
-    window.addEventListener('error', (e) => {
-      const div = document.getElementById('loginStatus');
-      if (div && !div.textContent) {
-        div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
-      }
-    });
+      // Global error banner
+      window.addEventListener('error', (e) => {
+        const div = document.getElementById('loginStatus');
+        if (div && !div.textContent) {
+          div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
+        }
+      });
 
+      // Pagination
+      const prevBtn = document.getElementById('prevPageBtn');
+      const nextBtn = document.getElementById('nextPageBtn');
+      if (prevBtn && nextBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          ps.offset = Math.max(0, ps.offset - ps.limit);
+          loadBookings();
+        });
+        nextBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          if (ps.offset + ps.limit < ps.total) {
+            ps.offset = ps.offset + ps.limit;
+            loadBookings();
+          }
+        });
+      }
+
+      // Auto-show app if token already present
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
         refreshAll();
       }
+
+      // Event bindings
       document.getElementById('loginBtn').addEventListener('click', login);
       document.getElementById('logoutBtn').addEventListener('click', () => {
         localStorage.removeItem('adminToken');
         token = '';
-        // Redirect to the booking page after logout instead of reloading
         location.href = 'index.html';
       });
       document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
@@ -780,29 +758,17 @@
       createTimePicker('bStart');
       createTimePicker('bEnd');
 
-      // Bind analytics loader
+      // Bind analytics & exports
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
-      if (analyticsBtn) {
-        analyticsBtn.addEventListener('click', loadAnalytics);
-      }
-
-      // Bind summary loader
+      if (analyticsBtn) analyticsBtn.addEventListener('click', loadAnalytics);
       const summaryBtn = document.getElementById('loadSummaryBtn');
-      if (summaryBtn) {
-        summaryBtn.addEventListener('click', loadSummary);
-      }
-
-      // Bind CSV downloader
+      if (summaryBtn) summaryBtn.addEventListener('click', loadSummary);
       const csvBtn = document.getElementById('downloadCsvBtn');
-      if (csvBtn) {
-        csvBtn.addEventListener('click', downloadCsv);
-      }
+      if (csvBtn) csvBtn.addEventListener('click', downloadCsv);
 
-      // Bind kiosk management actions
+      // Kiosk actions
       const genBtn = document.getElementById('generateKioskBtn');
-      if (genBtn) {
-        genBtn.addEventListener('click', generateKioskToken);
-      }
+      if (genBtn) genBtn.addEventListener('click', generateKioskToken);
       const kioskTable = document.getElementById('kioskTokensTable');
       if (kioskTable) {
         kioskTable.addEventListener('click', (e) => {
@@ -812,7 +778,6 @@
           }
         });
       }
-
     });
   </script>
 </body>
