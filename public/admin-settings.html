@@ -817,7 +817,21 @@
       document.getElementById('adminsTable').addEventListener('click', (e) => {
         if (e.target.classList.contains('delAdmin')) {
           const id = e.target.dataset.id;
-          fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
+          // When deleting an admin, check the response and surface any
+          // permission or validation errors.  Previously we unconditionally
+          // refreshed the list which masked failures such as forbidden or
+          // "last owner" errors.
+          fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' }))
+            .then(async (res) => {
+              if (res.ok) {
+                await loadAdmins();
+              } else {
+                const err = await res.json().catch(() => ({ error: 'Failed to delete admin' }));
+                alert(err.error || 'Failed to delete admin');
+                // Even on failure, reload the list so the UI stays consistent
+                await loadAdmins();
+              }
+            });
         }
       });
       document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
@@ -847,6 +861,15 @@
           }
         });
       }
+
+          // Load initial data (spaces, admins and kiosk tokens) when the page
+          // is first rendered.  If a valid admin token is already present in
+          // localStorage, refreshAll() will populate all sections of the
+          // settings page without waiting for the login flow.  Errors are
+          // caught and logged so they do not interrupt the rest of the script.
+          try { if (typeof refreshAll === 'function') { refreshAll(); } } catch (e) {
+            console.error('initial refreshAll error', e);
+          }
     });
   </script>
 </body>
