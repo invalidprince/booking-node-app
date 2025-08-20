@@ -48,7 +48,9 @@
         <input id="bDate" type="date" placeholder="Date">
         <input id="bStart" placeholder="Start Time" readonly>
         <input id="bEnd" placeholder="End Time" readonly>
-        <select id="bSpace"></select>
+        <!-- The space selector for new bookings.  Set a minimum width so the dropdown
+             is always visible even when no options have been loaded yet. -->
+        <select id="bSpace" style="min-width:140px;"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
       <!-- Recurrence controls -->
@@ -481,14 +483,19 @@
       // a valid token is not yet available when the page first loads.
       const res = await fetch('/api/spaces');
       const spaces = await res.json();
-      const tbody = document.querySelector('#spacesTable tbody');
-      tbody.innerHTML = '';
-      spaces.forEach(s => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
-          <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
-        tbody.appendChild(tr);
-      });
+      // If the settings table exists on this page, populate it.  The main admin
+      // panel does not include a spaces table (that lives on the settings
+      // page), so we need to guard against querying a non‑existent element.
+      const spacesTable = document.querySelector('#spacesTable tbody');
+      if (spacesTable) {
+        spacesTable.innerHTML = '';
+        spaces.forEach(s => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
+            <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
+          spacesTable.appendChild(tr);
+        });
+      }
       // Populate booking space selector
       const sSel = document.getElementById('bSpace');
       sSel.innerHTML = '';
@@ -1005,7 +1012,7 @@
       const csvBtn = document.getElementById('downloadCsvBtn');
       if (csvBtn) csvBtn.addEventListener('click', downloadCsv);
 
-      // Kiosk actions
+          // Kiosk actions
       const genBtn = document.getElementById('generateKioskBtn');
       if (genBtn) genBtn.addEventListener('click', generateKioskToken);
       const kioskTable = document.getElementById('kioskTokensTable');
@@ -1017,6 +1024,15 @@
           }
         });
       }
+
+          // Ensure the space dropdown is populated even if the user was already
+          // logged in (e.g. after a page refresh).  Calling loadSpaces() here
+          // guarantees the <select id="bSpace"> options are filled without
+          // waiting for the login flow to run refreshAll().  The function
+          // silently fails if it does not exist.
+          try { if (typeof loadSpaces === 'function') { loadSpaces(); } } catch(e) {
+            console.error('loadSpaces init error', e);
+          }
     });
   </script>
 </body>
