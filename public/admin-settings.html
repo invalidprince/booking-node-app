@@ -33,98 +33,76 @@
     <div id="loginStatus" style="color:red;"></div>
   </div>
 
-  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
-      <h2>Bookings</h2>
+  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div></div><div class="card">
+      <h2>Spaces</h2>
       <div class="row">
-        <input id="bName" placeholder="Name">
-        <input id="bEmail" placeholder="Email">
-        <input id="bDate" type="date">
-        <input id="bStart" placeholder="Start Time" readonly>
-        <input id="bEnd" placeholder="End Time" readonly>
-        <select id="bSpace"></select>
-        <button id="addBookingBtn">Add Booking</button>
-      </div>
-      <!-- Recurrence controls -->
-      <div class="row recurrence-controls">
-        <label for="bRecurrenceType">Recurrence:</label>
-        <select id="bRecurrenceType">
-          <option value="none">None</option>
-          <option value="day">Monthly – Day of month</option>
-          <option value="weekday">Monthly – Nth weekday</option>
-          <option value="weekly">Weekly</option>
+        <input id="spaceName" placeholder="Name">
+        <select id="spaceType">
+          <option value="desk">Desk</option>
+          <option value="office">Office</option>
+          <option value="conference">Conference</option>
         </select>
-        <input id="bRecurrenceDay" type="number" min="1" max="31" placeholder="Day" class="hidden">
-        <select id="bRecurrenceNth" class="hidden">
-          <option value="1">1st</option>
-          <option value="2">2nd</option>
-          <option value="3">3rd</option>
-          <option value="4">4th</option>
-          <option value="5">5th</option>
-        </select>
-        <select id="bRecurrenceWeekday" class="hidden">
-          <option value="0">Sunday</option>
-          <option value="1">Monday</option>
-          <option value="2">Tuesday</option>
-          <option value="3">Wednesday</option>
-          <option value="4">Thursday</option>
-          <option value="5">Friday</option>
-          <option value="6">Saturday</option>
-        </select>
+        <input id="spacePriority" type="number" placeholder="Priority (1 = highest)" value="1" min="1">
+        <button id="addSpaceBtn">Add Space</button>
       </div>
-      <div class="row" style="justify-content: space-between; align-items: center; margin: 8px 0;">
-        <div><strong>Bookings (upcoming)</strong></div>
-        <div>
-          <button id="prevPageBtn">&lt; Prev</button>
-          <span id="pageInfo" style="margin:0 8px;"></span>
-          <button id="nextPageBtn">Next &gt;</button>
-        </div>
-      </div>
-      <table id="bookingsTable">
+      <table id="spacesTable">
         <thead>
-          <tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Recurring</th><th>Action</th></tr>
+          <tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
 
-    <!-- Admin user management -->
+    <!-- Bookings management -->
     <div class="card">
-      <h2>Analytics</h2>
-      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-        <label for="analyticsPeriod">Period:</label>
-        <select id="analyticsPeriod">
-          <option value="month">This Month</option>
-          <option value="quarter">This Quarter</option>
-          <option value="year">This Year</option>
-          <option value="ytd">Year‑to‑date</option>
+      <h2>Admin Users</h2>
+      <div class="row">
+        <input id="aUser" placeholder="username (email)">
+        <input id="aPass" placeholder="password">
+        <!-- Role selection for new admin users -->
+        <select id="aRole">
+          <option value="admin" selected>Admin</option>
+          <option value="analyst">Analyst</option>
+          <option value="frontdesk">FrontDesk</option>
         </select>
-        <button id="loadAnalyticsBtn">Load Analytics</button>
-        <button id="loadSummaryBtn">Load Summary</button>
-        <button id="downloadCsvBtn">Download CSV</button>
+        <button id="addAdminBtn">Add Admin</button>
       </div>
-      <div id="analyticsResults" style="margin-top:12px;"></div>
-      <div id="summaryResults" style="margin-top:12px;"></div>
+      <table id="adminsTable">
+        <thead>
+          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
-    <!-- Kiosk management section -->
+    <!-- Analytics section -->
+    <div class="card">
+      <h2>Kiosk Devices</h2>
+      <div class="row">
+        <button id="generateKioskBtn">Generate Token</button>
+      </div>
+      <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
+      <table id="kioskTokensTable">
+        <thead>
+          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
+  </div>
+
+  </div>
 <script>
     let token = localStorage.getItem('adminToken') || '';
 
     
-    function updateSettingsLink() {
+    function ensureSuperAdmin() {
       const role = localStorage.getItem('adminRole') || 'admin';
-      const right = document.getElementById('rightActions');
-      if (!right) return;
-      right.innerHTML = '';
-      if (role === 'superadmin') {
-        const a = document.createElement('a');
-        a.href = '/admin-settings.html';
-        a.title = 'Settings';
-        a.textContent = '⚙️ Settings';
-        a.style.textDecoration = 'none';
-        a.style.fontSize = '14px';
-        right.appendChild(a);
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return; // login flow will handle showing login card
+      if (role !== 'superadmin') {
+        window.location.href = '/admin.html';
+        return;
       }
     }
     
@@ -158,7 +136,7 @@
           if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
+          ensureSuperAdmin();
           await refreshAll();
         } else {
           if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
@@ -174,7 +152,9 @@
     }
 
     async function refreshAll() {
-      await loadBookings();
+      await loadSpaces();
+      await loadAdmins();
+      await loadKioskTokens();
     }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
@@ -672,7 +652,7 @@
 
     // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
-      updateSettingsLink();
+      ensureSuperAdmin();
       // Global error banner
       window.addEventListener('error', (e) => {
         const div = document.getElementById('loginStatus');
@@ -705,7 +685,7 @@
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
+          ensureSuperAdmin();
         refreshAll();
       }
 

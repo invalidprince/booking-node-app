@@ -22,18 +22,45 @@
 </head>
 <body>
   <h1>Admin Portal</h1>
-
   <div id="loginCard" class="card">
     <h2>Login</h2>
     <div class="row">
       <input id="username" placeholder="Username (admin@example.com)">
       <input id="password" placeholder="Password (admin123)" type="password">
+      <!-- Prevent accidental form-submit reloads -->
       <button id="loginBtn" type="button">Login</button>
     </div>
-    <div id="loginStatus" style="color:red;"></div>
+    <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
 
-  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
+  <div id="app" class="hidden">
+    <div class="card">
+      <button id="logoutBtn">Logout</button>
+    </div>
+
+    <!-- Spaces management -->
+    <div class="card">
+      <h2>Spaces</h2>
+      <div class="row">
+        <input id="spaceName" placeholder="Name">
+        <select id="spaceType">
+          <option value="desk">Desk</option>
+          <option value="office">Office</option>
+          <option value="conference">Conference</option>
+        </select>
+        <input id="spacePriority" type="number" placeholder="Priority (1 = highest)" value="1" min="1">
+        <button id="addSpaceBtn">Add Space</button>
+      </div>
+      <table id="spacesTable">
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Bookings management -->
+    <div class="card">
       <h2>Bookings</h2>
       <div class="row">
         <input id="bName" placeholder="Name">
@@ -89,6 +116,28 @@
 
     <!-- Admin user management -->
     <div class="card">
+      <h2>Admin Users</h2>
+      <div class="row">
+        <input id="aUser" placeholder="username (email)">
+        <input id="aPass" placeholder="password">
+        <!-- Role selection for new admin users -->
+        <select id="aRole">
+          <option value="admin" selected>Admin</option>
+          <option value="analyst">Analyst</option>
+          <option value="frontdesk">FrontDesk</option>
+        </select>
+        <button id="addAdminBtn">Add Admin</button>
+      </div>
+      <table id="adminsTable">
+        <thead>
+          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Analytics section -->
+    <div class="card">
       <h2>Analytics</h2>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
         <label for="analyticsPeriod">Period:</label>
@@ -107,27 +156,24 @@
     </div>
 
     <!-- Kiosk management section -->
+    <div class="card">
+      <h2>Kiosk Devices</h2>
+      <div class="row">
+        <button id="generateKioskBtn">Generate Token</button>
+      </div>
+      <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
+      <table id="kioskTokensTable">
+        <thead>
+          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
-<script>
+  </div>
+
+  <script>
     let token = localStorage.getItem('adminToken') || '';
 
-    
-    function updateSettingsLink() {
-      const role = localStorage.getItem('adminRole') || 'admin';
-      const right = document.getElementById('rightActions');
-      if (!right) return;
-      right.innerHTML = '';
-      if (role === 'superadmin') {
-        const a = document.createElement('a');
-        a.href = '/admin-settings.html';
-        a.title = 'Settings';
-        a.textContent = '⚙️ Settings';
-        a.style.textDecoration = 'none';
-        a.style.fontSize = '14px';
-        right.appendChild(a);
-      }
-    }
-    
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
@@ -155,10 +201,8 @@
         if (res.ok && data && data.token) {
           token = data.token;
           localStorage.setItem('adminToken', token);
-          if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
           await refreshAll();
         } else {
           if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
@@ -174,7 +218,10 @@
     }
 
     async function refreshAll() {
+      await loadSpaces();
       await loadBookings();
+      await loadAdmins();
+      await loadKioskTokens();
     }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
@@ -672,7 +719,6 @@
 
     // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
-      updateSettingsLink();
       // Global error banner
       window.addEventListener('error', (e) => {
         const div = document.getElementById('loginStatus');
@@ -705,7 +751,6 @@
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
         refreshAll();
       }
 
