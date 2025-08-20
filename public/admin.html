@@ -23,16 +23,6 @@
 <body>
   <h1>Admin Portal</h1>
 
-  <div id="loginCard" class="card">
-    <h2>Login</h2>
-    <div class="row">
-      <input id="username" placeholder="Username (admin@example.com)">
-      <input id="password" placeholder="Password (admin123)" type="password">
-      <button id="loginBtn" type="button">Login</button>
-    </div>
-    <div id="loginStatus" style="color:red;"></div>
-  </div>
-
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
       <h2>Bookings</h2>
       <div class="row">
@@ -127,7 +117,7 @@
         right.appendChild(a);
       }
     }
-    
+
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
@@ -158,7 +148,7 @@
           if (data && data.role) localStorage.setItem('adminRole', data.role);
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
+        updateSettingsLink();
           await refreshAll();
         } else {
           if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
@@ -705,37 +695,37 @@
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
-          updateSettingsLink();
+        updateSettingsLink();
         refreshAll();
       }
 
       // Event bindings
-      document.getElementById('loginBtn').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', () => {
+      var _e=document.getElementById('loginBtn'); if(_e){_e.addEventListener('click', login);}
+      var _e=document.getElementById('logoutBtn'); if(_e){_e.addEventListener('click', () => {
         localStorage.removeItem('adminToken');
         token = '';
         location.href = 'index.html';
       });
-      document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
-      document.getElementById('spacesTable').addEventListener('click', (e) => {
+      var _e=document.getElementById('addSpaceBtn'); if(_e){_e.addEventListener('click', addSpace);}
+      var _e=document.getElementById('spacesTable'); if(_e){_e.addEventListener('click', (e) => {
         if (e.target.classList.contains('delSpace')) {
           deleteSpace(e.target.dataset.id);
         }
       });
-      document.getElementById('addBookingBtn').addEventListener('click', addBooking);
-      document.getElementById('bookingsTable').addEventListener('click', (e) => {
+      var _e=document.getElementById('addBookingBtn'); if(_e){_e.addEventListener('click', addBooking);}
+      var _e=document.getElementById('bookingsTable'); if(_e){_e.addEventListener('click', (e) => {
         if (e.target.classList.contains('delBooking')) {
           deleteBooking(e.target.dataset.id);
         }
       });
-      document.getElementById('addAdminBtn').addEventListener('click', addAdmin);
-      document.getElementById('adminsTable').addEventListener('click', (e) => {
+      var _e=document.getElementById('addAdminBtn'); if(_e){_e.addEventListener('click', addAdmin);}
+      var _e=document.getElementById('adminsTable'); if(_e){_e.addEventListener('click', (e) => {
         if (e.target.classList.contains('delAdmin')) {
           const id = e.target.dataset.id;
           fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
         }
       });
-      document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
+      var _e=document.getElementById('bRecurrenceType'); if(_e){_e.addEventListener('change', updateRecurrenceFields);
       updateRecurrenceFields();
 
       // Initialise time pickers for start and end times
@@ -764,5 +754,6 @@
       }
     });
   </script>
+</script>
 </body>
 </html>
