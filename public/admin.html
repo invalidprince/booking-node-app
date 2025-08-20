@@ -992,8 +992,10 @@
       if (document.getElementById('bStart')) createTimePicker('bStart');
       if (document.getElementById('bEnd')) createTimePicker('bEnd');
 
-      // Initialise the custom date picker for bookings
-      if (document.getElementById('bDate')) createDatePicker('bDate');
+      // Use the native HTML date input for the booking date.  The
+      // custom date picker (createDatePicker) is no longer required, so
+      // this call is commented out.
+      // if (document.getElementById('bDate')) createDatePicker('bDate');
 
       // Bind analytics & exports
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
