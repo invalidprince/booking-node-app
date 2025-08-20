@@ -802,35 +802,72 @@
       }
 
       // Event bindings
-      document.getElementById('loginBtn').addEventListener('click', login);
-      // Bind logout to our helper function.  This avoids undefined errors
-      // and clears both the adminToken and adminRole keys consistently.
-      document.getElementById('logoutBtn').addEventListener('click', logout);
-      document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
-      document.getElementById('spacesTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delSpace')) {
-          deleteSpace(e.target.dataset.id);
+      // Always bind login button when present
+      {
+        const el = document.getElementById('loginBtn');
+        if (el) el.addEventListener('click', login);
+      }
+      // Logout button
+      {
+        const el = document.getElementById('logoutBtn');
+        if (el) el.addEventListener('click', logout);
+      }
+      // Add space button
+      {
+        const el = document.getElementById('addSpaceBtn');
+        if (el) el.addEventListener('click', addSpace);
+      }
+      // Space table deletion
+      {
+        const el = document.getElementById('spacesTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delSpace')) deleteSpace(e.target.dataset.id);
+          });
         }
-      });
-      document.getElementById('addBookingBtn').addEventListener('click', addBooking);
-      document.getElementById('bookingsTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delBooking')) {
-          deleteBooking(e.target.dataset.id);
+      }
+      // Add booking button
+      {
+        const el = document.getElementById('addBookingBtn');
+        if (el) el.addEventListener('click', addBooking);
+      }
+      // Bookings table deletion
+      {
+        const el = document.getElementById('bookingsTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id);
+          });
         }
-      });
-      document.getElementById('addAdminBtn').addEventListener('click', addAdmin);
-      document.getElementById('adminsTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delAdmin')) {
-          const id = e.target.dataset.id;
-          fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
+      }
+      // Add admin button
+      {
+        const el = document.getElementById('addAdminBtn');
+        if (el) el.addEventListener('click', addAdmin);
+      }
+      // Admins table deletion
+      {
+        const el = document.getElementById('adminsTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delAdmin')) {
+              const id = e.target.dataset.id;
+              fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
+            }
+          });
         }
-      });
-      document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
-      updateRecurrenceFields();
-
-      // Initialise time pickers for start and end times
-      createTimePicker('bStart');
-      createTimePicker('bEnd');
+      }
+      // Recurrence selector
+      {
+        const el = document.getElementById('bRecurrenceType');
+        if (el) {
+          el.addEventListener('change', updateRecurrenceFields);
+          updateRecurrenceFields();
+        }
+      }
+      // Initialise time pickers for start and end times only when inputs exist
+      if (document.getElementById('bStart')) createTimePicker('bStart');
+      if (document.getElementById('bEnd')) createTimePicker('bEnd');
 
       // Bind analytics & exports
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
