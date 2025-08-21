@@ -168,214 +168,45 @@ const APP_BASE_URL = process.env.APP_BASE_URL || '';
 // SMTP_ENCRYPTION (e.g. "STARTTLS", "TLS", "SSL").  When
 // SMTP_ENCRYPTION=STARTTLS, use a non‑secure connection and let Nodemailer
 // upgrade via STARTTLS.  For SSL/TLS we enable `secure`.
+
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  const enc = String(process.env.SMTP_ENCRYPTION || '').toLowerCase();
+  let secure;
+  if (enc === 'ssl' || enc === 'tls') {
+    secure = true;
+  } else if (enc === 'starttls') {
+    secure = false;
+  } else if (typeof process.env.SMTP_SECURE !== 'undefined') {
+    secure = (process.env.SMTP_SECURE === 'true');
+  } else {
+    secure = false; // default to STARTTLS
+  }
   const port = Number(process.env.SMTP_PORT || 587);
-  const secure = (process.env.SMTP_SECURE === 'true') || (String(process.env.SMTP_ENCRYPTION||'').toLowerCase() === 'tls') || (String(process.env.SMTP_ENCRYPTION||'').toLowerCase() === 'ssl');
+  const enableDebug = String(process.env.SMTP_DEBUG || '').toLowerCase() === 'true';
+
   mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: port,
-    secure: secure,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
-    }
+    port,
+    secure,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    logger: enableDebug,
+    debug: enableDebug,
+    tls: secure ? undefined : { ciphers: 'TLSv1.2' } // STARTTLS-friendly
   });
-}
 
-// ----- Kiosk access configuration -----
-// Instead of relying on IP allowlists (which are brittle with dynamic IPs),
-// kiosk devices authenticate using one‑time registration tokens. Admins can
-// generate tokens via the admin portal. A kiosk device visits the
-// `/kiosk-setup.html` page and enters its token, which is then exchanged for
-// a persistent session cookie. Subsequent kiosk requests must include this
-// cookie. The set of active tokens is persisted to disk. Active kiosk
-// sessions live only in memory and are cleared on server restart.
-
-// In‑memory map of kiosk sessions: tokenId -> true when claimed. When a
-// session is established the server sets a signed cookie with the token ID.
-const kioskSessions = {};
-
-// Persistent list of kiosk registration tokens. Each token is an object
-// { id: uuid, code: string }. `id` is the identifier persisted in
-// cookies/sessions, and `code` is what the admin shares with the kiosk
-// device during provisioning. After a token is claimed by a device the
-// `code` remains in the list until explicitly revoked by an admin.
-const kioskTokens = [];
-
-/**
- * Generate a short alphanumeric code for kiosk registration. We use a
- * truncated UUID and uppercase it for readability. Admins will distribute
- * this code to kiosk devices.
- *
- * @returns {string} A 6‑character token code
- */
-function generateKioskCode() {
-  return uuidv4().split('-')[0].slice(0, 6).toUpperCase();
-}
-
-/**
- * Parse cookies from the request headers. Returns an object mapping
- * cookie names to values. This avoids pulling in an external cookie
- * parser dependency.
- *
- * @param {object} req
- * @returns {object}
- */
-function parseCookies(req) {
-  const list = {};
-  const rc = req.headers.cookie;
-  if (!rc) return list;
-  rc.split(';').forEach(cookie => {
-    const parts = cookie.split('=');
-    const key = parts.shift()?.trim();
-    const val = parts.join('=');
-    if (key) list[key] = decodeURIComponent(val);
-  });
-  return list;
-}
-
-/**
- * Determine if a request originates from an authenticated kiosk session.
- * A valid kiosk session means the request has a `kioskToken` cookie whose
- * value matches the ID of a known kiosk token. This check does not
- * distinguish between claimed and unclaimed tokens; any token ID still
- * present in the kioskTokens array is considered valid. The session
- * cookie is set when a kiosk device claims a token via the `/api/kiosk/claim`
- * endpoint.
- *
- * @param {object} req
- * @returns {boolean}
- */
-function isKioskSession(req) {
-  const cookies = parseCookies(req);
-  const id = cookies['kioskToken'];
-  if (!id) return false;
-  return kioskTokens.some(tok => tok.id === id);
-}
-
-// ----- Data persistence configuration -----
-// The DATA_FILE constant is defined near the top of this file, derived from
-// DATA_DIR.  It specifies where persistent data will be stored.
-
-/**
- * Load persisted spaces, bookings and admins from disk. If the file does not
- * exist or cannot be parsed, the in-memory defaults remain unchanged.
- */
-async function loadData() {
-  // When a database is configured pull state from the DB.  Otherwise fall
-  // back to loading from the JSON file on disk.  In both cases the in‑memory
-  // arrays will be populated with fresh objects.
-  if (db) {
-    try {
-      // Fetch spaces
-      const sRes = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
-      spaces.splice(0, spaces.length, ...sRes.rows);
-      // Fetch bookings
-      const bRes = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
-      bookings.splice(0, bookings.length, ...bRes.rows.map(row => {
-        // The recurring column is stored as JSON in the DB.  When null it
-        // should be represented as false in our in‑memory structure for
-        // consistency with the original JSON schema.
-        return {
-          id: row.id,
-          name: row.name,
-          email: row.email,
-          spaceId: row.spaceId,
-          date: row.date,
-          startTime: row.startTime,
-          endTime: row.endTime,
-          recurring: row.recurring || false,
-          checkInTime: row.checkInTime || null,
-          checkOutTime: row.checkOutTime || null,
-          cancelled: !!row.cancelled
-        };
-      }));
-      // Fetch admins
-      const aRes = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
-      admins.splice(0, admins.length, ...aRes.rows.map(row => {
-        return {
-          id: row.id,
-          username: row.username,
-          passwordHash: row.passwordHash,
-          salt: row.salt,
-          role: row.role
-        };
-      }));
-      // Fetch verified emails
-      const vRes = await db.query('SELECT email FROM "verifiedEmails"');
-      verifiedEmails.splice(0, verifiedEmails.length, ...vRes.rows.map(row => row.email));
-      // Fetch kiosk tokens
-      const kRes = await db.query('SELECT id, code FROM "kioskTokens"');
-      kioskTokens.splice(0, kioskTokens.length, ...kRes.rows.map(row => ({ id: row.id, code: row.code })));
-      // If no data is present in the database (initial launch) attempt to load
-      // from the JSON file and persist it to the database.  This allows
-      // seamless migration of existing data.json into the new Postgres
-      // persistence layer.  If any of the in‑memory arrays remain empty
-      // after this block they will simply start empty.
-      const isAllEmpty =
-        spaces.length === 0 &&
-        bookings.length === 0 &&
-        admins.length === 0 &&
-        verifiedEmails.length === 0 &&
-        kioskTokens.length === 0;
-      if (isAllEmpty) {
-        try {
-          const raw = fs.readFileSync(DATA_FILE, 'utf8');
-          const data = JSON.parse(raw);
-          if (Array.isArray(data.spaces) && data.spaces.length) {
-            spaces.splice(0, spaces.length, ...data.spaces);
-          }
-          if (Array.isArray(data.bookings) && data.bookings.length) {
-            bookings.splice(0, bookings.length, ...data.bookings);
-          }
-          if (Array.isArray(data.admins) && data.admins.length) {
-            admins.splice(0, admins.length, ...data.admins);
-          }
-          if (Array.isArray(data.verifiedEmails) && data.verifiedEmails.length) {
-            verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
-          }
-          if (Array.isArray(data.kioskTokens) && data.kioskTokens.length) {
-            kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
-          }
-          // Persist loaded data into the database so that subsequent restarts
-          // will read from the DB.  Intentionally do not await so that the
-          // server can start serving requests while the import is running.
-          saveData().catch(() => {});
-        } catch (err) {
-          // No JSON file found or parse error; nothing to migrate
-        }
+  if (typeof mailTransporter.verify === 'function') {
+    mailTransporter.verify(function(err, success) {
+      if (err) {
+        console.error('SMTP transport verification failed:', err && (err.stack || err.message || err));
+      } else {
+        const encMode = enc || (secure ? 'tls' : 'starttls');
+        console.log(`SMTP transport ready: ${process.env.SMTP_HOST}:${port} secure=${encMode}`);
       }
-      return;
-    } catch (err) {
-      console.error('Failed to load data from database:', err);
-      // In case of an error fall through to file-based loading
-    }
-  }
-  // Fallback: load from JSON file if present
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    const data = JSON.parse(raw);
-    if (Array.isArray(data.spaces)) {
-      spaces.splice(0, spaces.length, ...data.spaces);
-    }
-    if (Array.isArray(data.bookings)) {
-      bookings.splice(0, bookings.length, ...data.bookings);
-    }
-    if (Array.isArray(data.admins)) {
-      admins.splice(0, admins.length, ...data.admins);
-    }
-    if (Array.isArray(data.verifiedEmails)) {
-      verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
-    }
-    if (Array.isArray(data.kioskTokens)) {
-      kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
-    }
-  } catch (err) {
-    // File not found or invalid JSON; will be created on first save
-    // console.warn('No data file found or parse error:', err);
+    });
   }
 }
+
 
 /**
  * Persist the current spaces, bookings and admins to disk. Tokens are not
@@ -635,14 +466,16 @@ function verifyPassword(password, admin) {
  * @returns {Promise<void>}
  */
 async function sendEmail(to, subject, text, attachments = []) {
-  if (mailTransporter && (process.env.MAIL_FROM || process.env.SMTP_USER)) {
-    const fromAddr = process.env.MAIL_FROM || process.env.SMTP_USER;
+  const headerFrom = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
+  const envelopeFrom = process.env.SMTP_USER || process.env.SMTP_FROM || process.env.MAIL_FROM;
+  if (mailTransporter && headerFrom) {
     const mailOptions = {
-      from: fromAddr,
+      from: headerFrom,
       to,
       subject,
       text,
-      attachments: attachments && attachments.length ? attachments : undefined
+      attachments: attachments && attachments.length ? attachments : undefined,
+      envelope: { from: envelopeFrom, to }
     };
     try { await mailTransporter.sendMail(mailOptions); }
     catch (err) { console.error('Email send error:', err); }
@@ -1921,6 +1754,21 @@ app.post('/api/bootstrap-admin', async (req, res) => {
 });
 // === END TEMPORARY ROUTE ===
 
+
+
+// ---- Test email endpoint ----
+app.get('/api/test-email', async (req, res) => {
+  const expected = process.env.TEST_EMAIL_KEY;
+  if (expected && req.query.key !== expected) return res.status(403).json({ ok: false, error: 'forbidden' });
+  const to = req.query.to || process.env.MAIL_FROM || process.env.SMTP_USER;
+  try {
+    await sendEmail(to, 'Test Email (Booking App)', 'This is a test email from the Booking App.');
+    return res.json({ ok: true, to });
+  } catch (e) {
+    console.error('Test email failed:', e && (e.stack || e.message || e));
+    return res.status(500).json({ ok: false, error: 'send-failed', detail: String(e && (e.message || e)) });
+  }
+});
 app.listen(PORT, () => {
     console.log(`Booking app listening at http://localhost:${PORT}`);
   });
