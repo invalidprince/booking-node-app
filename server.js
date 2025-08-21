@@ -700,7 +700,7 @@ async function sendEmail(to, subject, text, attachments = []) {
   } else {
     throw new Error('Email could not be sent and no fallback is allowed.');
   }
-`);
+;
     console.log(`Subject: ${subject}`);
     console.log(text);
     if (attachments && attachments.length) {
@@ -710,8 +710,8 @@ async function sendEmail(to, subject, text, attachments = []) {
       });
     }
     console.log('--------------------------\n');
-  }
-}
+  };
+
 
 /**
  * Determine whether a recurring rule applies on a particular date.
