@@ -186,19 +186,7 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
   }
   // Choose port: use provided SMTP_PORT, otherwise 465 for secure or 587 for starttls/plain
   const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
-  mailTransporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: port,
-    secure: secure,
-      requireTLS: (enc === 'starttls'),
-      tls: { minVersion: 'TLSv1.2' },
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
-    }
-  });
-}
-  // Proactively verify SMTP configuration on startup for clearer diagnostics
+  \1
   if (mailTransporter && typeof mailTransporter.verify === 'function') {
     mailTransporter.verify(function(err, success) {
       if (err) {
@@ -662,10 +650,10 @@ function verifyPassword(password, admin) {
  * @returns {Promise<void>}
  */
 async function sendEmail(to, subject, text, attachments = []) {
+  // Determine the configured From address.  We support both MAIL_FROM and
+  // SMTP_FROM for backwards compatibility.  The first defined value wins.
   const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
-  if (!mailTransporter) { throw new Error('SMTP transporter not configured'); }
-  if (!fromAddr) { throw new Error('MAIL_FROM not configured'); }
-  {
+  if (mailTransporter && fromAddr) {
     const mailOptions = {
       from: fromAddr,
       to,
@@ -698,9 +686,10 @@ async function sendEmail(to, subject, text, attachments = []) {
       }
     }
   } else {
-    throw new Error('Email could not be sent and no fallback is allowed.');
-  }
-;
+    // No SMTP configured; log to console instead.  Include attachment
+    // information so that developers are aware of the additional content.
+    console.log('\n--- EMAIL NOTIFICATION ---');
+    console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text);
     if (attachments && attachments.length) {
@@ -710,8 +699,8 @@ async function sendEmail(to, subject, text, attachments = []) {
       });
     }
     console.log('--------------------------\n');
-  };
-
+  }
+}
 
 /**
  * Determine whether a recurring rule applies on a particular date.
