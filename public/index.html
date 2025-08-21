@@ -17,10 +17,20 @@
     button:hover { background: #0056b3; }
     .status { margin-top: 15px; min-height: 20px; color: #333; }
     .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
+    .link-bar { text-align: center; margin-bottom: 16px; }
+    .link-bar a { margin: 0 8px; color: #007bff; text-decoration: none; }
+    .link-bar a:hover { text-decoration: underline; }
+    /* Styles for availability results */
+    .yes { color: #2e7d32; font-weight: bold; }
+    .no { color: #c62828; font-weight: bold; }
   </style>
 </head>
 <body>
   <h1>Book a Space</h1>
+  <div class="link-bar" style="text-align: right;">
+    <!-- Link to Admin portal on top right -->
+    <a href="admin.html" id="adminLink">Admin Portal</a>
+  </div>
   <div class="card">
     <div class="field">
       <label for="name">Full Name</label>
@@ -50,24 +60,50 @@
     <div class="status" id="status"></div>
   </div>
 
+  <!-- Availability section -->
+  <div class="card" id="availability-section">
+    <h2>Check Space Availability</h2>
+    <div class="field">
+      <label for="avDate">Date</label>
+      <input type="date" id="avDate">
+    </div>
+    <div class="field">
+      <label for="avSpace">Space</label>
+      <select id="avSpace"></select>
+    </div>
+    <button id="checkBtn" type="button">Check Availability</button>
+    <div id="results"></div>
+  </div>
+
   <script>
+    // Populate the list of spaces and auto-booking options
     async function populateSpaces() {
       try {
         const res = await fetch('/api/spaces');
         const spaces = await res.json();
         const select = document.getElementById('space');
         select.innerHTML = '';
+        // Auto-booking options
         const autoDesk = document.createElement('option');
-        autoDesk.value = 'auto-desk'; autoDesk.textContent = 'Auto book Desk'; select.appendChild(autoDesk);
+        autoDesk.value = 'auto-desk';
+        autoDesk.textContent = 'Auto book Desk';
+        select.appendChild(autoDesk);
         const autoOffice = document.createElement('option');
-        autoOffice.value = 'auto-office'; autoOffice.textContent = 'Auto book Office'; select.appendChild(autoOffice);
+        autoOffice.value = 'auto-office';
+        autoOffice.textContent = 'Auto book Office';
+        select.appendChild(autoOffice);
         spaces.forEach(space => {
           const opt = document.createElement('option');
-          opt.value = space.id; opt.textContent = space.name; select.appendChild(opt);
+          opt.value = space.id;
+          opt.textContent = space.name;
+          select.appendChild(opt);
         });
-      } catch (err) { console.error(err); }
+      } catch (err) {
+        console.error(err);
+      }
     }
 
+    // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
     function convertTo24h(str) {
       if (!str) return '';
       const parts = str.trim().split(' ');
@@ -80,6 +116,7 @@
       return `${hour.toString().padStart(2, '0')}:${minute}`;
     }
 
+    // Create a custom time picker that appears on focus
     function createTimePicker(inputId) {
       const input = document.getElementById(inputId);
       const container = document.createElement('div');
@@ -94,16 +131,37 @@
       const hourSelect = document.createElement('select');
       for (let i = 1; i <= 12; i++) {
         const opt = document.createElement('option');
-        opt.value = i < 10 ? '0' + i : '' + i; opt.textContent = opt.value; hourSelect.appendChild(opt);
+        opt.value = i < 10 ? '0' + i : '' + i;
+        opt.textContent = opt.value;
+        hourSelect.appendChild(opt);
       }
       const minuteSelect = document.createElement('select');
-      ['00', '15', '30', '45'].forEach(m => { const opt = document.createElement('option'); opt.value = m; opt.textContent = m; minuteSelect.appendChild(opt); });
+      ['00', '15', '30', '45'].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        minuteSelect.appendChild(opt);
+      });
       const periodSelect = document.createElement('select');
-      ['AM', 'PM'].forEach(p => { const opt = document.createElement('option'); opt.value = p; opt.textContent = p; periodSelect.appendChild(opt); });
+      ['AM', 'PM'].forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        periodSelect.appendChild(opt);
+      });
       const setBtn = document.createElement('button');
-      setBtn.type = 'button'; setBtn.textContent = 'Set'; setBtn.style.marginLeft = '8px';
-      setBtn.onclick = () => { const value = `${hourSelect.value}:${minuteSelect.value} ${periodSelect.value}`; input.value = value; container.style.display = 'none'; };
-      container.appendChild(hourSelect); container.appendChild(minuteSelect); container.appendChild(periodSelect); container.appendChild(setBtn);
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const value = `${hourSelect.value}:${minuteSelect.value} ${periodSelect.value}`;
+        input.value = value;
+        container.style.display = 'none';
+      };
+      container.appendChild(hourSelect);
+      container.appendChild(minuteSelect);
+      container.appendChild(periodSelect);
+      container.appendChild(setBtn);
       document.body.appendChild(container);
       input.addEventListener('focus', () => {
         const rect = input.getBoundingClientRect();
@@ -112,10 +170,13 @@
         container.style.display = 'block';
       });
       document.addEventListener('click', (e) => {
-        if (e.target !== input && !container.contains(e.target)) container.style.display = 'none';
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
       });
     }
 
+    // Submit the booking form
     async function doBook() {
       const name = document.getElementById('name').value.trim();
       const email = document.getElementById('email').value.trim();
@@ -125,7 +186,10 @@
       const spaceVal = document.getElementById('space').value;
       const statusEl = document.getElementById('status');
       statusEl.style.color = '#333';
-      if (!name || !email || !date || !startRaw || !endRaw || !spaceVal) { statusEl.textContent = 'Please fill in all fields.'; return; }
+      if (!name || !email || !date || !startRaw || !endRaw || !spaceVal) {
+        statusEl.textContent = 'Please fill in all fields.';
+        return;
+      }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
       try {
@@ -133,17 +197,36 @@
           const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
           const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
           const res = await fetch('/api/bookings/auto?' + params.toString());
-          if (res.ok) { const data = await res.json(); statusEl.style.color = 'green'; statusEl.textContent = `Success! Reserved ${data.spaceName} on ${date}.`; }
-          else { const err = await res.json(); statusEl.style.color = 'red'; statusEl.textContent = err.error || 'Auto-book failed.'; }
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.style.color = 'green';
+            statusEl.textContent = `Success! Reserved ${data.spaceName} on ${date}.`;
+          } else {
+            const err = await res.json();
+            statusEl.style.color = 'red';
+            statusEl.textContent = err.error || 'Auto-book failed.';
+          }
         } else {
           const res = await fetch('/api/bookings', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, email, spaceId: spaceVal, date, startTime, endTime, recurring: false })
           });
-          if (res.ok) { const data = await res.json(); statusEl.style.color = 'green'; statusEl.textContent = `Success! Your booking ID is ${data.id}.`; }
-          else { const err = await res.json(); statusEl.style.color = 'red'; statusEl.textContent = err.error || 'Booking failed.'; }
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.style.color = 'green';
+            statusEl.textContent = `Success! Your booking ID is ${data.id}.`;
+          } else {
+            const err = await res.json();
+            statusEl.style.color = 'red';
+            statusEl.textContent = err.error || 'Booking failed.';
+          }
         }
-      } catch (err) { console.error(err); statusEl.style.color = 'red'; statusEl.textContent = 'An error occurred while booking.'; }
+      } catch (err) {
+        console.error(err);
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'An error occurred while booking.';
+      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -151,7 +234,92 @@
       createTimePicker('start-time');
       createTimePicker('end-time');
       document.getElementById('book-btn').addEventListener('click', doBook);
+
+      // Availability initialization
+      populateAvailSpaces();
+      document.getElementById('checkBtn').addEventListener('click', checkAvailability);
     });
+
+    // Populate spaces for availability check (without auto options)
+    async function populateAvailSpaces() {
+      try {
+        const res = await fetch('/api/spaces');
+        const data = await res.json();
+        const sel = document.getElementById('avSpace');
+        sel.innerHTML = '';
+        data.forEach(space => {
+          const opt = document.createElement('option');
+          opt.value = space.id;
+          opt.textContent = space.name;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Generate time slots in 30 minute increments between 08:00 and 18:00
+    function generateTimeSlots() {
+      const slots = [];
+      const pad = n => String(n).padStart(2, '0');
+      for (let hour = 8; hour < 18; hour++) {
+        const h1 = pad(hour);
+        const h2 = pad(hour + 1);
+        slots.push({ start: `${h1}:00`, end: `${h1}:30` });
+        slots.push({ start: `${h1}:30`, end: `${h2}:00` });
+      }
+      return slots;
+    }
+
+    // Check space availability and render results
+    async function checkAvailability() {
+      const date = document.getElementById('avDate').value;
+      const spaceId = document.getElementById('avSpace').value;
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '';
+      if (!date || !spaceId) {
+        resultsDiv.textContent = 'Please select a date and space.';
+        return;
+      }
+      // Fetch spaces to determine the selected space type
+      let spacesList = [];
+      try {
+        const resSpaces = await fetch('/api/spaces');
+        spacesList = await resSpaces.json();
+      } catch (err) {
+        console.error(err);
+      }
+      const selected = spacesList.find(s => s.id === spaceId);
+      if (!selected) {
+        resultsDiv.textContent = 'Invalid space.';
+        return;
+      }
+      const slots = generateTimeSlots();
+      // Query availability for each slot in parallel
+      const promises = slots.map(async ({ start, end }) => {
+        const params = new URLSearchParams({ date, start, end });
+        params.append('type', selected.type);
+        const res = await fetch('/api/availability?' + params.toString());
+        const avail = await res.json();
+        const isAvail = avail.some(s => s.id === spaceId);
+        return { start, end, available: isAvail };
+      });
+      const results = await Promise.all(promises);
+      // Build table output
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Time</th><th>Available</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      results.forEach(r => {
+        const tr = document.createElement('tr');
+        const timeLabel = `${r.start} - ${r.end}`;
+        tr.innerHTML = `<td>${timeLabel}</td><td class="${r.available ? 'yes' : 'no'}">${r.available ? 'Yes' : 'No'}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      resultsDiv.appendChild(table);
+    }
   </script>
 </body>
 </html>
