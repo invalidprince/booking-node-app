@@ -496,6 +496,50 @@ async function sendEmail(to, subject, text, attachments = []) {
 }
 
 /**
+ * Send a booking confirmation email.  This helper centralises the logic for
+ * constructing and sending a booking confirmation.  It accepts all the
+ * necessary booking details and a cancel link, builds a simple plain‑text
+ * message and delegates to sendEmail().  Any errors during send are
+ * reported to the console with a descriptive context.
+ *
+ * @param {string} name      Name of the user who made the booking
+ * @param {string} email     Normalised recipient email address
+ * @param {string} space     Human friendly name of the booked space
+ * @param {string} date      Booking date (YYYY‑MM‑DD)
+ * @param {string} start     Start time (HH:MM)
+ * @param {string} end       End time (HH:MM)
+ * @param {string} cancelLink A full URL that allows the user to cancel the booking
+ * @param {string} [context] Optional context label for error messages
+ */
+async function sendBookingConfirmationEmail(
+  name,
+  email,
+  space,
+  date,
+  start,
+  end,
+  cancelLink,
+  context = ''
+) {
+  const emailText =
+    `Hello ${name},\n\n` +
+    `Your booking has been confirmed!\n\n` +
+    `Space: ${space}\n` +
+    `Date: ${date}\n` +
+    `Start Time: ${start}\n` +
+    `End Time: ${end}\n\n` +
+    `If you need to cancel your booking, please click the link below:\n` +
+    `${cancelLink}\n\n` +
+    `Thank you.`;
+  try {
+    await sendEmail(email, 'Booking Confirmation', emailText);
+  } catch (err) {
+    const label = context ? ` (${context})` : '';
+    console.error('Error sending booking confirmation' + label, err);
+  }
+}
+
+/**
  * Determine whether a recurring rule applies on a particular date.
  *
  * @param {string} dateStr ISO date string (YYYY‑MM‑DD)
@@ -903,17 +947,16 @@ app.post('/api/bookings', (req, res) => {
       const spaceName = spaces.find(s => s.id === spaceId)?.name || spaceId;
       const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
       const cancelLink = `${baseUrl}/cancel/${id}`;
-      const emailText =
-        `Hello ${name},\n\n` +
-        `Your booking has been confirmed!\n\n` +
-        `Space: ${spaceName}\n` +
-        `Date: ${date}\n` +
-        `Start Time: ${startTime}\n` +
-        `End Time: ${endTime}\n\n` +
-        `If you need to cancel your booking, please click the link below:\n` +
-        `${cancelLink}\n\n` +
-        `Thank you.`;
-      await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+      // Use helper to build and send booking confirmation email
+      await sendBookingConfirmationEmail(
+        name,
+        emailNormalized,
+        spaceName,
+        date,
+        startTime,
+        endTime,
+        cancelLink
+      );
     } catch (err) {
       console.error('Error sending booking confirmation', err);
     }
@@ -1025,17 +1068,17 @@ app.get('/api/bookings/auto', (req, res) => {
           const spaceName = space.name;
           const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
           const cancelLink = `${baseUrl}/cancel/${id}`;
-          const emailText =
-            `Hello ${name},\n\n` +
-            `Your booking has been confirmed!\n\n` +
-            `Space: ${spaceName}\n` +
-            `Date: ${date}\n` +
-            `Start Time: ${startTime}\n` +
-            `End Time: ${endTime}\n\n` +
-            `If you need to cancel your booking, please click the link below:\n` +
-            `${cancelLink}\n\n` +
-            `Thank you.`;
-          await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+          // Use helper to build and send booking confirmation email (auto context)
+          await sendBookingConfirmationEmail(
+            name,
+            emailNormalized,
+            spaceName,
+            date,
+            startTime,
+            endTime,
+            cancelLink,
+            'auto'
+          );
         } catch (err) {
           console.error('Error sending booking confirmation (auto)', err);
         }
