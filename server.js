@@ -647,8 +647,7 @@ async function sendEmail(to, subject, text, attachments = []) {
     try { await mailTransporter.sendMail(mailOptions); }
     catch (err) { console.error('Email send error:', err); }
   } else {
-    console.log('
---- EMAIL NOTIFICATION ---');
+    console.log('Email Sent');
     console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text);
