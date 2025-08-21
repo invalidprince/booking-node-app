@@ -659,7 +659,6 @@ async function sendEmail(to, subject, text, attachments = []) {
       console.log('Note: Attachments would have been sent if SMTP were configured.');
     }
     console.log('Email Sent');
-');
   }
 }
 
