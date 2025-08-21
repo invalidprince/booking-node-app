@@ -671,17 +671,20 @@ function verifyPassword(password, admin) {
  * @returns {Promise<void>}
  */
 async function sendEmail(to, subject, text, attachments = []) {
-  // Determine the configured From address.  We support both MAIL_FROM and
-  // SMTP_FROM for backwards compatibility.  The first defined value wins.
-  const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
+  // Always use the authenticated SMTP user as the From address. EnGuard
+  // requires the sender/header From to match the authenticated mailbox.
+  const fromAddr = process.env.SMTP_USER;
   if (mailTransporter && fromAddr) {
+    // Build mail options. Always set the envelope's from to the authenticated
+    // user as well, otherwise providers may reject messages based on envelope
+    // mismatch. Only include attachments when provided.
     const mailOptions = {
       from: fromAddr,
       to,
       subject,
       text,
-      // Only include attachments when provided
-      attachments: attachments && attachments.length ? attachments : undefined
+      attachments: attachments && attachments.length ? attachments : undefined,
+      envelope: { from: fromAddr, to }
     };
     try {
       // Attempt to send the email with attachments (if any)
@@ -695,7 +698,8 @@ async function sendEmail(to, subject, text, attachments = []) {
             from: fromAddr,
             to,
             subject,
-            text
+            text,
+            envelope: { from: fromAddr, to }
           };
           await mailTransporter.sendMail(fallbackOptions);
         } catch (err2) {
@@ -718,6 +722,7 @@ async function sendEmail(to, subject, text, attachments = []) {
         const size = att.content ? att.content.length : 0;
         console.log(`[Attachment: ${att.filename || 'file'} (${size} bytes)]`);
       });
+      console.log('Note: Attachments would have been sent if SMTP were configured.');
     }
     console.log('--------------------------\n');
   }
