@@ -170,53 +170,17 @@ const APP_BASE_URL = process.env.APP_BASE_URL || '';
 // upgrade via STARTTLS.  For SSL/TLS we enable `secure`.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-  // Determine encryption method.  Prefer SMTP_ENCRYPTION if present,
-  // otherwise fall back to SMTP_SECURE (true/false).  If neither is
-  // provided, default to STARTTLS on port 587.
-  const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
-  let secure;
-  if (enc === 'ssl' || enc === 'tls') {
-    secure = true;
-  } else if (enc === 'starttls') {
-    secure = false;
-  } else if (typeof process.env.SMTP_SECURE !== 'undefined') {
-    secure = (process.env.SMTP_SECURE === 'true');
-  } else {
-    secure = false;
-  }
-  // Choose port: use provided SMTP_PORT, otherwise 465 for secure or 587 for starttls/plain
-  const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
+  const port = Number(process.env.SMTP_PORT || 587);
+  const secure = (process.env.SMTP_SECURE === 'true') || (String(process.env.SMTP_ENCRYPTION||'').toLowerCase() === 'tls') || (String(process.env.SMTP_ENCRYPTION||'').toLowerCase() === 'ssl');
   mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: port,
     secure: secure,
-    // When using STARTTLS we allow Nodemailer to upgrade the connection rather
-    // than starting secure from the outset.  Explicitly require TLS when
-    // enc===starttls and set a minimum TLS version to avoid downgrade
-    // attacks.  For SSL/TLS (enc===ssl or tls) `secure: true` suffices.
-    requireTLS: (enc === 'starttls'),
-    tls: { minVersion: 'TLSv1.2' },
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     }
   });
-
-    // Verify SMTP configuration on startup.  This triggers a connection
-    // attempt and will report errors immediately rather than waiting until
-    // the first email is sent.  If verification fails the error is logged.
-    if (mailTransporter && typeof mailTransporter.verify === 'function') {
-      mailTransporter.verify(function(err, success) {
-        if (err) {
-          console.error('SMTP transport verification failed:', err && (err.stack || err.message || err));
-        } else {
-          // Use enc if provided, otherwise infer the encryption mode based on the
-          // secure flag.  When secure===true and enc is unset we assume TLS.
-          const encMode = enc || (secure ? 'tls' : 'starttls');
-          console.log(`SMTP transport ready: ${process.env.SMTP_HOST}:${port} secure=${encMode}`);
-        }
-      });
-    }
 }
 
 // ----- Kiosk access configuration -----
@@ -671,52 +635,20 @@ function verifyPassword(password, admin) {
  * @returns {Promise<void>}
  */
 async function sendEmail(to, subject, text, attachments = []) {
-  // Prefer MAIL_FROM for header "From" if provided (backward compatibility),
-  // otherwise fall back to SMTP_FROM then SMTP_USER. For the SMTP envelope
-  // we default to the authenticated SMTP_USER to satisfy providers that
-  // require the envelope sender to match the login mailbox.
-  const headerFrom = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
-  const envelopeFrom = process.env.SMTP_USER || process.env.SMTP_FROM || process.env.MAIL_FROM;
-  if (mailTransporter && headerFrom) {
-    // Build mail options. Always set the envelope.from to the authenticated
-    // user when available to avoid rejections based on envelope mismatch.
+  if (mailTransporter && (process.env.MAIL_FROM || process.env.SMTP_USER)) {
+    const fromAddr = process.env.MAIL_FROM || process.env.SMTP_USER;
     const mailOptions = {
-      from: headerFrom,
+      from: fromAddr,
       to,
       subject,
-      envelope: { from: envelopeFrom, to },
       text,
-      attachments: attachments && attachments.length ? attachments : undefined,
-      envelope: { from: fromAddr, to }
+      attachments: attachments && attachments.length ? attachments : undefined
     };
-    try {
-      // Attempt to send the email with attachments (if any)
-      await mailTransporter.sendMail(mailOptions);
-    } catch (err) {
-      console.error('Email send error:', err);
-      // Fallback: retry without attachments if attachments were present
-      if (attachments && attachments.length) {
-        try {
-          const fallbackOptions = {
-            from: fromAddr,
-            to,
-            subject,
-            text,
-            envelope: { from: fromAddr, to }
-          };
-          await mailTransporter.sendMail(fallbackOptions);
-        } catch (err2) {
-          console.error('Fallback email send error:', err2);
-          throw err2;
-        }
-      } else {
-        throw err;
-      }
-    }
+    try { await mailTransporter.sendMail(mailOptions); }
+    catch (err) { console.error('Email send error:', err); }
   } else {
-    // No SMTP configured; log to console instead.  Include attachment
-    // information so that developers are aware of the additional content.
-    console.log('\n--- EMAIL NOTIFICATION ---');
+    console.log('
+--- EMAIL NOTIFICATION ---');
     console.log(`To: ${to}`);
     console.log(`Subject: ${subject}`);
     console.log(text);
@@ -727,7 +659,8 @@ async function sendEmail(to, subject, text, attachments = []) {
       });
       console.log('Note: Attachments would have been sent if SMTP were configured.');
     }
-    console.log('--------------------------\n');
+    console.log('--------------------------
+');
   }
 }
 
