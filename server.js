@@ -186,17 +186,38 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
   }
   // Choose port: use provided SMTP_PORT, otherwise 465 for secure or 587 for starttls/plain
   const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
-  \1
-  if (mailTransporter && typeof mailTransporter.verify === 'function') {
-    mailTransporter.verify(function(err, success) {
-      if (err) {
-        console.error('SMTP transport verification failed:', err && (err.stack || err.message || err));
-      } else {
-        console.log(`SMTP transport ready: ${process.env.SMTP_HOST}:${port} secure=${enc || 'starttls'}`);
-      }
-    });
-  }
+  mailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: port,
+    secure: secure,
+    // When using STARTTLS we allow Nodemailer to upgrade the connection rather
+    // than starting secure from the outset.  Explicitly require TLS when
+    // enc===starttls and set a minimum TLS version to avoid downgrade
+    // attacks.  For SSL/TLS (enc===ssl or tls) `secure: true` suffices.
+    requireTLS: (enc === 'starttls'),
+    tls: { minVersion: 'TLSv1.2' },
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    }
+  });
 
+    // Verify SMTP configuration on startup.  This triggers a connection
+    // attempt and will report errors immediately rather than waiting until
+    // the first email is sent.  If verification fails the error is logged.
+    if (mailTransporter && typeof mailTransporter.verify === 'function') {
+      mailTransporter.verify(function(err, success) {
+        if (err) {
+          console.error('SMTP transport verification failed:', err && (err.stack || err.message || err));
+        } else {
+          // Use enc if provided, otherwise infer the encryption mode based on the
+          // secure flag.  When secure===true and enc is unset we assume TLS.
+          const encMode = enc || (secure ? 'tls' : 'starttls');
+          console.log(`SMTP transport ready: ${process.env.SMTP_HOST}:${port} secure=${encMode}`);
+        }
+      });
+    }
+}
 
 // ----- Kiosk access configuration -----
 // Instead of relying on IP allowlists (which are brittle with dynamic IPs),
