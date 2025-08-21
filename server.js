@@ -163,13 +163,33 @@ const PORT = process.env.PORT || 5050;
 const APP_BASE_URL = process.env.APP_BASE_URL || '';
 
 // Initialise an email transporter if SMTP environment variables are provided.
-// If not provided, sendEmail will fall back to console logging.
+// If not provided, sendEmail will fall back to console logging.  Support both
+// legacy SMTP_SECURE (boolean string) and the more descriptive
+// SMTP_ENCRYPTION (e.g. "STARTTLS", "TLS", "SSL").  When
+// SMTP_ENCRYPTION=STARTTLS, use a non‑secure connection and let Nodemailer
+// upgrade via STARTTLS.  For SSL/TLS we enable `secure`.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  // Determine encryption method.  Prefer SMTP_ENCRYPTION if present,
+  // otherwise fall back to SMTP_SECURE (true/false).  If neither is
+  // provided, default to STARTTLS on port 587.
+  const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
+  let secure;
+  if (enc === 'ssl' || enc === 'tls') {
+    secure = true;
+  } else if (enc === 'starttls') {
+    secure = false;
+  } else if (typeof process.env.SMTP_SECURE !== 'undefined') {
+    secure = (process.env.SMTP_SECURE === 'true');
+  } else {
+    secure = false;
+  }
+  // Choose port: use provided SMTP_PORT, otherwise 465 for secure or 587 for starttls/plain
+  const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
   mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: (process.env.SMTP_SECURE === 'true'),
+    port: port,
+    secure: secure,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
@@ -1024,6 +1044,20 @@ app.post('/api/bookings', (req, res) => {
   if (!space) {
     return res.status(404).json({ error: 'Space not found' });
   }
+
+  // Prevent bookings in the past relative to America/New_York timezone.  Compute
+  // the selected start datetime and compare against the current Eastern time.
+  // This ensures server‑side enforcement even if the client omits the check.
+  try {
+    const selectedStart = new Date(`${date}T${startTime}:00`);
+    const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const easternNow = new Date(easternNowStr);
+    if (selectedStart < easternNow) {
+      return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+    }
+  } catch (err) {
+    // ignore date parsing errors
+  }
   // Enforce maximum booking duration for single and recurring bookings
   const [sh, sm] = startTime.split(':').map(x => parseInt(x, 10));
   const [eh, em] = endTime.split(':').map(x => parseInt(x, 10));
@@ -1053,9 +1087,43 @@ app.post('/api/bookings', (req, res) => {
     return res.status(400).json({ error: 'Recurring booking conflicts with an existing booking in a future period' });
   }
   const id = uuidv4();
-  bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec, checkedIn: false });
+  const booking = {
+    id,
+    name,
+    email: emailNormalized,
+    spaceId,
+    date,
+    startTime,
+    endTime,
+    recurring: rec,
+    checkedIn: false
+  };
+  bookings.push(booking);
   // Persist changes
   saveData();
+  // Send booking confirmation email asynchronously.  Construct a cancel URL
+  // using either APP_BASE_URL (when set) or the current request's host.  The
+  // confirmation includes basic booking details and a cancel link.
+  (async () => {
+    try {
+      const spaceName = spaces.find(s => s.id === spaceId)?.name || spaceId;
+      const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const cancelLink = `${baseUrl}/cancel/${id}`;
+      const emailText =
+        `Hello ${name},\n\n` +
+        `Your booking has been confirmed!\n\n` +
+        `Space: ${spaceName}\n` +
+        `Date: ${date}\n` +
+        `Start Time: ${startTime}\n` +
+        `End Time: ${endTime}\n\n` +
+        `If you need to cancel your booking, please click the link below:\n` +
+        `${cancelLink}\n\n` +
+        `Thank you.`;
+      await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+    } catch (err) {
+      console.error('Error sending booking confirmation', err);
+    }
+  })();
   res.json({ id });
 });
 
@@ -1124,15 +1192,60 @@ app.get('/api/bookings/auto', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
+
+  // Prevent bookings in the past relative to America/New_York timezone.  Compute
+  // the selected start datetime and compare against the current Eastern time.
+  try {
+    const selectedStart = new Date(`${date}T${startTime}:00`);
+    const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const easternNow = new Date(easternNowStr);
+    if (selectedStart < easternNow) {
+      return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+    }
+  } catch (err) {
+    // ignore parse errors
+  }
   const candidates = spaces
     .filter(s => s.type === type)
     .sort((a, b) => a.priorityOrder - b.priorityOrder);
   for (const space of candidates) {
     if (isSpaceAvailable(space.id, date, startTime, endTime)) {
       const id = uuidv4();
-      bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false, checkedIn: false });
+      const booking = {
+        id,
+        name,
+        email: emailNormalized,
+        spaceId: space.id,
+        date,
+        startTime,
+        endTime,
+        recurring: false,
+        checkedIn: false
+      };
+      bookings.push(booking);
       // Persist immediately so that cancellation link works even if the process restarts
       saveData();
+      // Send booking confirmation email asynchronously
+      (async () => {
+        try {
+          const spaceName = space.name;
+          const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+          const cancelLink = `${baseUrl}/cancel/${id}`;
+          const emailText =
+            `Hello ${name},\n\n` +
+            `Your booking has been confirmed!\n\n` +
+            `Space: ${spaceName}\n` +
+            `Date: ${date}\n` +
+            `Start Time: ${startTime}\n` +
+            `End Time: ${endTime}\n\n` +
+            `If you need to cancel your booking, please click the link below:\n` +
+            `${cancelLink}\n\n` +
+            `Thank you.`;
+          await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+        } catch (err) {
+          console.error('Error sending booking confirmation (auto)', err);
+        }
+      })();
       return res.json({ id, spaceName: space.name });
     }
   }
@@ -1529,6 +1642,7 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
     const e = new Date(end);
     if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
       startDate = s;
+      // Include entire end day
       endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
     }
   }
@@ -1560,89 +1674,61 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
       }
     }
   }
-  // Compute analytics per user for offices
-  const analyticsMap = {};
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const officeBookings = bookings.filter(b => {
+  // Build CSV of all bookings (past and future) within the selected period.
+  // Each row represents a single booking occurrence (including future
+  // occurrences of recurring bookings) and includes the date, user, space,
+  // start and end times, and check‑in status.  This replaces the
+  // aggregated per‑user analytics previously returned.
+  const headers = ['Date','Name','Email','Space','Start','End','CheckedIn'];
+  const rows = [headers.join(',')];
+  // Helper to escape CSV fields
+  function escapeCsv(value) {
+    const s = String(value);
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? '"' + s.replace(/"/g, '""') + '"'
+      : s;
+  }
+  // Iterate through all bookings (all spaces) and generate rows
+  bookings.forEach(b => {
     const space = spaces.find(s => s.id === b.spaceId);
-    return space && space.type === 'office';
-  });
-  officeBookings.forEach(b => {
-    const email = b.email;
-    if (!analyticsMap[email]) {
-      analyticsMap[email] = {
-        email,
-        dayCounts: { Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0 },
-        bookingsCount: 0,
-        totalMinutesCheckIn: 0,
-        totalMinutesNoCheckIn: 0,
-        checkIns: 0,
-        noCheckIns: 0
-      };
-    }
-    const entry = analyticsMap[email];
+    const spaceName = space ? space.name : b.spaceId;
     function processOccurrence(dateStr) {
       const d = new Date(dateStr);
-      if (isNaN(d.getTime()) || d < startDate || d > endDate) return;
-      const dow = d.getDay();
-      entry.dayCounts[dayNames[dow]]++;
-      entry.bookingsCount++;
-      const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
-      const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
-      if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
-        let diff = (eh * 60 + em) - (sh * 60 + sm);
-        if (diff < 0) diff = 0;
-        if (b.checkedIn) entry.totalMinutesCheckIn += diff;
-        else entry.totalMinutesNoCheckIn += diff;
-      }
-      if (b.checkedIn) entry.checkIns++;
-      else entry.noCheckIns++;
+      if (isNaN(d.getTime())) return;
+      if (d < startDate || d > endDate) return;
+      const row = [
+        dateStr,
+        b.name,
+        b.email,
+        spaceName,
+        b.startTime,
+        b.endTime,
+        b.checkedIn ? 'Yes' : 'No'
+      ];
+      rows.push(row.map(escapeCsv).join(','));
     }
     if (b.recurring && typeof b.recurring === 'object') {
+      // Generate occurrences for recurring bookings within the range
       const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
       const endIter = new Date(endDate);
       startIter.setHours(0,0,0,0);
       endIter.setHours(0,0,0,0);
       const currentDate = new Date(startIter);
       while (currentDate <= endIter) {
-        const dateStr = currentDate.toISOString().slice(0, 10);
+        const dateStr = currentDate.toISOString().slice(0,10);
         if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
           processOccurrence(dateStr);
         }
         currentDate.setDate(currentDate.getDate() + 1);
       }
     } else {
+      // Single booking
       processOccurrence(b.date);
     }
   });
-  // Build CSV
-  const headers = ['Email','Sun','Mon','Tue','Wed','Thu','Fri','Sat','Bookings','CheckInHours','NoShowHours','CheckIns','NoCheckIns'];
-  const rows = [headers.join(',')];
-  Object.values(analyticsMap).forEach(e => {
-    const row = [
-      e.email,
-      e.dayCounts['Sunday'],
-      e.dayCounts['Monday'],
-      e.dayCounts['Tuesday'],
-      e.dayCounts['Wednesday'],
-      e.dayCounts['Thursday'],
-      e.dayCounts['Friday'],
-      e.dayCounts['Saturday'],
-      e.bookingsCount,
-      (e.totalMinutesCheckIn / 60).toFixed(2),
-      (e.totalMinutesNoCheckIn / 60).toFixed(2),
-      e.checkIns,
-      e.noCheckIns
-    ];
-    const escaped = row.map(field => {
-      const s = String(field);
-      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-    });
-    rows.push(escaped.join(','));
-  });
   const csv = rows.join('\r\n');
   res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="analytics.csv"');
+  res.setHeader('Content-Disposition', 'attachment; filename="bookings.csv"');
   res.send(csv);
 });
 
