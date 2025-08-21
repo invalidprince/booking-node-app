@@ -1830,13 +1830,13 @@ app.post('/api/request-verification', (req, res) => {
   // Generate a unique token and store mapping to email
   const token = uuidv4();
   verificationTokens[token] = emailNormalized;
-  // Build verification link
-  let verifyLink = '';
+  // Build a verification link.  Prefer the configured APP_BASE_URL when provided.
+  // Otherwise construct an absolute URL using the current request's protocol and host.
+  let verifyLink;
   if (APP_BASE_URL) {
     verifyLink = `${APP_BASE_URL}/verify-email/${token}`;
   } else {
-    // Fallback to relative path (useful when running locally)
-    verifyLink = `/verify-email/${token}`;
+    verifyLink = `${req.protocol}://${req.get('host')}/verify-email/${token}`;
   }
   const message =
     `Please verify your email address by clicking the following link:\n\n${verifyLink}\n\n` +
