@@ -671,17 +671,20 @@ function verifyPassword(password, admin) {
  * @returns {Promise<void>}
  */
 async function sendEmail(to, subject, text, attachments = []) {
-  // Always use the authenticated SMTP user as the From address. EnGuard
-  // requires the sender/header From to match the authenticated mailbox.
-  const fromAddr = process.env.SMTP_USER;
-  if (mailTransporter && fromAddr) {
-    // Build mail options. Always set the envelope's from to the authenticated
-    // user as well, otherwise providers may reject messages based on envelope
-    // mismatch. Only include attachments when provided.
+  // Prefer MAIL_FROM for header "From" if provided (backward compatibility),
+  // otherwise fall back to SMTP_FROM then SMTP_USER. For the SMTP envelope
+  // we default to the authenticated SMTP_USER to satisfy providers that
+  // require the envelope sender to match the login mailbox.
+  const headerFrom = process.env.MAIL_FROM || process.env.SMTP_FROM || process.env.SMTP_USER;
+  const envelopeFrom = process.env.SMTP_USER || process.env.SMTP_FROM || process.env.MAIL_FROM;
+  if (mailTransporter && headerFrom) {
+    // Build mail options. Always set the envelope.from to the authenticated
+    // user when available to avoid rejections based on envelope mismatch.
     const mailOptions = {
-      from: fromAddr,
+      from: headerFrom,
       to,
       subject,
+      envelope: { from: envelopeFrom, to },
       text,
       attachments: attachments && attachments.length ? attachments : undefined,
       envelope: { from: fromAddr, to }
