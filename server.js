@@ -6,6 +6,18 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+// Conditionally import pg.  When running locally without the pg package
+// installed we catch the error and leave Pool undefined.  The database
+// functionality is only used when DATABASE_URL is provided and pg is
+// available.  This allows the application to run in environments without
+// network access (e.g. during development/testing) and still use the
+// JSON-based persistence.
+let Pool;
+try {
+  ({ Pool } = require('pg'));
+} catch (_) {
+  Pool = null;
+}
 
 // -----------------------------------------------------------------------------
 // Configuration constants
@@ -30,6 +42,98 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 // environment variable to override the default.
 const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
 const BACKUP_RETENTION = 10;
+
+// -----------------------------------------------------------------------------
+// Database configuration
+//
+// When a DATABASE_URL environment variable is provided the application will
+// persist all state into an external Postgres database.  This allows data to
+// survive across deployments and can be shared between multiple running
+// instances.  If no DATABASE_URL is defined the application will fall back to
+// the original JSON based persistence on the local filesystem.
+
+const DATABASE_URL = process.env.DATABASE_URL || null;
+
+// A pg Pool instance used when DATABASE_URL is defined.  Created on demand in
+// initDb().  When DATABASE_URL is not set this remains null and all database
+// operations are skipped.
+let db = null;
+
+/**
+ * Initialise the Postgres database.  When DATABASE_URL is defined this
+ * function will create a connection pool and ensure all required tables exist.
+ * The schema is deliberately simple and mirrors the in‑memory arrays used by
+ * the application.  If no DATABASE_URL is provided this function resolves
+ * immediately without performing any actions.
+ */
+async function initDb() {
+  // Bail out if no DATABASE_URL or the pg module is not available.  This
+  // preserves the original file‑based persistence when pg is missing or no
+  // connection string is provided.
+  if (!DATABASE_URL || !Pool) {
+    return;
+  }
+  // Attempt to connect to the external database.  If the connection fails
+  // (e.g. network unreachable or authentication error) fall back to the
+  // JSON‑based persistence by setting `db` to null.  The `pg` module will
+  // automatically resolve DNS and may prefer IPv6.  Provide an SSL option
+  // with a relaxed certificate check for hosted providers like Supabase.
+  try {
+    db = new Pool({
+      connectionString: DATABASE_URL,
+      ssl: { rejectUnauthorized: false }
+    });
+    // Probe the connection to verify the host is reachable.  A simple
+    // SELECT eliminates silent failures when the pool is lazily initialised.
+    await db.query('SELECT 1');
+  } catch (err) {
+    console.error('Failed to connect to database; falling back to file‑based storage:', err);
+    db = null;
+    return;
+  }
+  // Create tables if they do not already exist.  Use JSONB for the
+  // recurring column to store arbitrary recurrence objects.  Note that the
+  // bookings table includes optional checkInTime, checkOutTime and
+  // cancelled fields added in later iterations of the app.
+  const createStatements = [
+    `CREATE TABLE IF NOT EXISTS spaces (
+      id UUID PRIMARY KEY,
+      name TEXT,
+      type TEXT,
+      "priorityOrder" INTEGER
+    );`,
+    `CREATE TABLE IF NOT EXISTS bookings (
+      id UUID PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      "spaceId" UUID,
+      date TEXT,
+      "startTime" TEXT,
+      "endTime" TEXT,
+      recurring JSONB,
+      "checkInTime" TEXT,
+      "checkOutTime" TEXT,
+      cancelled BOOLEAN
+    );`,
+    `CREATE TABLE IF NOT EXISTS admins (
+      id UUID PRIMARY KEY,
+      username TEXT UNIQUE,
+      "passwordHash" TEXT,
+      salt TEXT,
+      role TEXT
+    );`,
+    `CREATE TABLE IF NOT EXISTS "verifiedEmails" (
+      email TEXT PRIMARY KEY
+    );`,
+    `CREATE TABLE IF NOT EXISTS "kioskTokens" (
+      id UUID PRIMARY KEY,
+      code TEXT
+    );`
+  ];
+  for (const stmt of createStatements) {
+    await db.query(stmt);
+  }
+}
 
 /*
  * Simple office booking application
@@ -59,18 +163,60 @@ const PORT = process.env.PORT || 5050;
 const APP_BASE_URL = process.env.APP_BASE_URL || '';
 
 // Initialise an email transporter if SMTP environment variables are provided.
-// If not provided, sendEmail will fall back to console logging.
+// If not provided, sendEmail will fall back to console logging.  Support both
+// legacy SMTP_SECURE (boolean string) and the more descriptive
+// SMTP_ENCRYPTION (e.g. "STARTTLS", "TLS", "SSL").  When
+// SMTP_ENCRYPTION=STARTTLS, use a non‑secure connection and let Nodemailer
+// upgrade via STARTTLS.  For SSL/TLS we enable `secure`.
 let mailTransporter = null;
 if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+  // Determine encryption method.  Prefer SMTP_ENCRYPTION if present,
+  // otherwise fall back to SMTP_SECURE (true/false).  If neither is
+  // provided, default to STARTTLS on port 587.
+  const enc = (process.env.SMTP_ENCRYPTION || '').toLowerCase();
+  let secure;
+  if (enc === 'ssl' || enc === 'tls') {
+    secure = true;
+  } else if (enc === 'starttls') {
+    secure = false;
+  } else if (typeof process.env.SMTP_SECURE !== 'undefined') {
+    secure = (process.env.SMTP_SECURE === 'true');
+  } else {
+    secure = false;
+  }
+  // Choose port: use provided SMTP_PORT, otherwise 465 for secure or 587 for starttls/plain
+  const port = Number(process.env.SMTP_PORT || (secure ? 465 : 587));
   mailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: (process.env.SMTP_SECURE === 'true'),
+    port: port,
+    secure: secure,
+    // When using STARTTLS we allow Nodemailer to upgrade the connection rather
+    // than starting secure from the outset.  Explicitly require TLS when
+    // enc===starttls and set a minimum TLS version to avoid downgrade
+    // attacks.  For SSL/TLS (enc===ssl or tls) `secure: true` suffices.
+    requireTLS: (enc === 'starttls'),
+    tls: { minVersion: 'TLSv1.2' },
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
     }
   });
+
+    // Verify SMTP configuration on startup.  This triggers a connection
+    // attempt and will report errors immediately rather than waiting until
+    // the first email is sent.  If verification fails the error is logged.
+    if (mailTransporter && typeof mailTransporter.verify === 'function') {
+      mailTransporter.verify(function(err, success) {
+        if (err) {
+          console.error('SMTP transport verification failed:', err && (err.stack || err.message || err));
+        } else {
+          // Use enc if provided, otherwise infer the encryption mode based on the
+          // secure flag.  When secure===true and enc is unset we assume TLS.
+          const encMode = enc || (secure ? 'tls' : 'starttls');
+          console.log(`SMTP transport ready: ${process.env.SMTP_HOST}:${port} secure=${encMode}`);
+        }
+      });
+    }
 }
 
 // ----- Kiosk access configuration -----
@@ -152,7 +298,97 @@ function isKioskSession(req) {
  * Load persisted spaces, bookings and admins from disk. If the file does not
  * exist or cannot be parsed, the in-memory defaults remain unchanged.
  */
-function loadData() {
+async function loadData() {
+  // When a database is configured pull state from the DB.  Otherwise fall
+  // back to loading from the JSON file on disk.  In both cases the in‑memory
+  // arrays will be populated with fresh objects.
+  if (db) {
+    try {
+      // Fetch spaces
+      const sRes = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
+      spaces.splice(0, spaces.length, ...sRes.rows);
+      // Fetch bookings
+      const bRes = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
+      bookings.splice(0, bookings.length, ...bRes.rows.map(row => {
+        // The recurring column is stored as JSON in the DB.  When null it
+        // should be represented as false in our in‑memory structure for
+        // consistency with the original JSON schema.
+        return {
+          id: row.id,
+          name: row.name,
+          email: row.email,
+          spaceId: row.spaceId,
+          date: row.date,
+          startTime: row.startTime,
+          endTime: row.endTime,
+          recurring: row.recurring || false,
+          checkInTime: row.checkInTime || null,
+          checkOutTime: row.checkOutTime || null,
+          cancelled: !!row.cancelled
+        };
+      }));
+      // Fetch admins
+      const aRes = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
+      admins.splice(0, admins.length, ...aRes.rows.map(row => {
+        return {
+          id: row.id,
+          username: row.username,
+          passwordHash: row.passwordHash,
+          salt: row.salt,
+          role: row.role
+        };
+      }));
+      // Fetch verified emails
+      const vRes = await db.query('SELECT email FROM "verifiedEmails"');
+      verifiedEmails.splice(0, verifiedEmails.length, ...vRes.rows.map(row => row.email));
+      // Fetch kiosk tokens
+      const kRes = await db.query('SELECT id, code FROM "kioskTokens"');
+      kioskTokens.splice(0, kioskTokens.length, ...kRes.rows.map(row => ({ id: row.id, code: row.code })));
+      // If no data is present in the database (initial launch) attempt to load
+      // from the JSON file and persist it to the database.  This allows
+      // seamless migration of existing data.json into the new Postgres
+      // persistence layer.  If any of the in‑memory arrays remain empty
+      // after this block they will simply start empty.
+      const isAllEmpty =
+        spaces.length === 0 &&
+        bookings.length === 0 &&
+        admins.length === 0 &&
+        verifiedEmails.length === 0 &&
+        kioskTokens.length === 0;
+      if (isAllEmpty) {
+        try {
+          const raw = fs.readFileSync(DATA_FILE, 'utf8');
+          const data = JSON.parse(raw);
+          if (Array.isArray(data.spaces) && data.spaces.length) {
+            spaces.splice(0, spaces.length, ...data.spaces);
+          }
+          if (Array.isArray(data.bookings) && data.bookings.length) {
+            bookings.splice(0, bookings.length, ...data.bookings);
+          }
+          if (Array.isArray(data.admins) && data.admins.length) {
+            admins.splice(0, admins.length, ...data.admins);
+          }
+          if (Array.isArray(data.verifiedEmails) && data.verifiedEmails.length) {
+            verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
+          }
+          if (Array.isArray(data.kioskTokens) && data.kioskTokens.length) {
+            kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
+          }
+          // Persist loaded data into the database so that subsequent restarts
+          // will read from the DB.  Intentionally do not await so that the
+          // server can start serving requests while the import is running.
+          saveData().catch(() => {});
+        } catch (err) {
+          // No JSON file found or parse error; nothing to migrate
+        }
+      }
+      return;
+    } catch (err) {
+      console.error('Failed to load data from database:', err);
+      // In case of an error fall through to file-based loading
+    }
+  }
+  // Fallback: load from JSON file if present
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
     const data = JSON.parse(raw);
@@ -181,7 +417,7 @@ function loadData() {
  * Persist the current spaces, bookings and admins to disk. Tokens are not
  * persisted because they are only valid for the lifetime of the process.
  */
-function saveData() {
+async function saveData() {
   const out = {
     spaces,
     bookings,
@@ -189,14 +425,74 @@ function saveData() {
     verifiedEmails,
     kioskTokens
   };
+  // Persist to JSON file regardless of DB presence.  This provides a local
+  // backup and maintains compatibility with environments that do not use
+  // Postgres.  Failures here are logged but do not prevent execution.
   try {
     fs.writeFileSync(DATA_FILE, JSON.stringify(out, null, 2));
-    // After successfully saving the primary data file, also write a backup
-    // copy with a timestamped filename.  Backups are helpful in case of
-    // unexpected corruption or accidental deletion of the primary JSON file.
     createBackup(out);
   } catch (err) {
-    console.error('Failed to save data:', err);
+    console.error('Failed to save data to JSON file:', err);
+  }
+  // Persist to database if configured.  Use a transaction to ensure that
+  // deletes and inserts succeed together.  On failure the transaction is
+  // rolled back leaving the previous data intact.  Because this function may
+  // be invoked frequently we perform simple wholesale deletes followed by
+  // inserts; this is acceptable given the small scale of the application.
+  if (db) {
+    try {
+      await db.query('BEGIN');
+      // Clear all tables
+      await db.query('DELETE FROM spaces');
+      await db.query('DELETE FROM bookings');
+      await db.query('DELETE FROM admins');
+      await db.query('DELETE FROM "verifiedEmails"');
+      await db.query('DELETE FROM "kioskTokens"');
+      // Insert spaces
+      for (const s of spaces) {
+        await db.query('INSERT INTO spaces (id, name, type, "priorityOrder") VALUES ($1, $2, $3, $4)', [s.id, s.name, s.type, s.priorityOrder]);
+      }
+      // Insert bookings
+      for (const b of bookings) {
+        await db.query(
+          'INSERT INTO bookings (id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)',
+          [
+            b.id,
+            b.name,
+            b.email,
+            b.spaceId,
+            b.date,
+            b.startTime,
+            b.endTime,
+            b.recurring && typeof b.recurring === 'object' ? b.recurring : null,
+            b.checkInTime || null,
+            b.checkOutTime || null,
+            b.cancelled || false
+          ]
+        );
+      }
+      // Insert admins
+      for (const a of admins) {
+        await db.query(
+          'INSERT INTO admins (id, username, "passwordHash", salt, role) VALUES ($1,$2,$3,$4,$5)',
+          [a.id, a.username, a.passwordHash || a.password, a.salt || null, a.role]
+        );
+      }
+      // Insert verified emails
+      for (const email of verifiedEmails) {
+        await db.query('INSERT INTO "verifiedEmails" (email) VALUES ($1)', [email]);
+      }
+      // Insert kiosk tokens
+      for (const kt of kioskTokens) {
+        await db.query('INSERT INTO "kioskTokens" (id, code) VALUES ($1, $2)', [kt.id, kt.code]);
+      }
+      await db.query('COMMIT');
+    } catch (err) {
+      console.error('Failed to save data to database:', err);
+      try {
+        await db.query('ROLLBACK');
+      } catch (_) {}
+    }
   }
 }
 
@@ -298,9 +594,7 @@ const verificationTokens = {};
 // Kiosk access configuration section for definitions of kioskTokens and
 // kioskSessions.
 
-// Load persisted data from disk (if any). This will overwrite the default
-// values defined above if a data file exists.
-loadData();
+// Note: data is loaded asynchronously in the server bootstrapping routine
 
 // ----- Helper functions ------------------------------------------------------
 
@@ -359,18 +653,63 @@ function verifyPassword(password, admin) {
  * @param {string} text Plain‑text body of the email
  * @param {Array<object>} [attachments] Optional array of attachment objects
  */
-function sendEmail(to, subject, text, attachments = []) {
-  if (mailTransporter && process.env.MAIL_FROM) {
+/**
+ * Send an email using the configured SMTP transporter.  This helper is
+ * implemented as an async function so callers may optionally await the
+ * completion of the send.  When attachments are provided they will be
+ * passed directly to nodemailer.  If no mail transporter is configured
+ * the email is logged to the console instead.  Any errors during
+ * transmission are surfaced via a rejected promise.  To preserve
+ * backwards compatibility with the previous implementation this function
+ * attempts a fallback send without attachments when the initial send
+ * fails.
+ *
+ * @param {string} to Recipient email address
+ * @param {string} subject Email subject line
+ * @param {string} text Plain‑text body of the email
+ * @param {Array<object>} [attachments] Optional array of attachment objects
+ * @returns {Promise<void>}
+ */
+async function sendEmail(to, subject, text, attachments = []) {
+  // Always use the authenticated SMTP user as the From address. EnGuard
+  // requires the sender/header From to match the authenticated mailbox.
+  const fromAddr = process.env.SMTP_USER;
+  if (mailTransporter && fromAddr) {
+    // Build mail options. Always set the envelope's from to the authenticated
+    // user as well, otherwise providers may reject messages based on envelope
+    // mismatch. Only include attachments when provided.
     const mailOptions = {
-      from: process.env.MAIL_FROM,
+      from: fromAddr,
       to,
       subject,
       text,
-      attachments: attachments && attachments.length ? attachments : undefined
+      attachments: attachments && attachments.length ? attachments : undefined,
+      envelope: { from: fromAddr, to }
     };
-    mailTransporter.sendMail(mailOptions).catch(err => {
+    try {
+      // Attempt to send the email with attachments (if any)
+      await mailTransporter.sendMail(mailOptions);
+    } catch (err) {
       console.error('Email send error:', err);
-    });
+      // Fallback: retry without attachments if attachments were present
+      if (attachments && attachments.length) {
+        try {
+          const fallbackOptions = {
+            from: fromAddr,
+            to,
+            subject,
+            text,
+            envelope: { from: fromAddr, to }
+          };
+          await mailTransporter.sendMail(fallbackOptions);
+        } catch (err2) {
+          console.error('Fallback email send error:', err2);
+          throw err2;
+        }
+      } else {
+        throw err;
+      }
+    }
   } else {
     // No SMTP configured; log to console instead.  Include attachment
     // information so that developers are aware of the additional content.
@@ -380,8 +719,10 @@ function sendEmail(to, subject, text, attachments = []) {
     console.log(text);
     if (attachments && attachments.length) {
       attachments.forEach(att => {
-        console.log(`[Attachment: ${att.filename || 'file'} (${(att.content || '').length} bytes)]`);
+        const size = att.content ? att.content.length : 0;
+        console.log(`[Attachment: ${att.filename || 'file'} (${size} bytes)]`);
       });
+      console.log('Note: Attachments would have been sent if SMTP were configured.');
     }
     console.log('--------------------------\n');
   }
@@ -524,46 +865,7 @@ function checkRecurringAvailability(spaceId, firstDate, startTime, endTime, recu
  * @param {string} method iCalendar method (REQUEST or CANCEL)
  * @param {boolean} cancelled Whether the event should include a cancelled status
  * @returns {string} iCalendar formatted string
- */
-function generateICS(booking, spaceName, method = 'REQUEST', cancelled = false) {
-  const { id, date, startTime, endTime, name, email } = booking;
-  // Parse date and times into components
-  const [yStr, mStr, dStr] = date.split('-');
-  const [startH, startM] = startTime.split(':').map(n => parseInt(n, 10));
-  const [endH, endM] = endTime.split(':').map(n => parseInt(n, 10));
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-  // Build timestamps in format YYYYMMDDTHHMMSS
-  const dtStart = `${yStr}${mStr}${dStr}T${String(startH).padStart(2, '0')}${String(startM).padStart(2, '0')}00`;
-  const dtEnd = `${yStr}${mStr}${dStr}T${String(endH).padStart(2, '0')}${String(endM).padStart(2, '0')}00`;
-  const dtStamp = new Date().toISOString().replace(/[-:]/g, '').split('.')[0];
-  const lines = [];
-  lines.push('BEGIN:VCALENDAR');
-  lines.push('VERSION:2.0');
-  lines.push('PRODID:-//Office Booking//EN');
-  lines.push(`METHOD:${method}`);
-  lines.push('BEGIN:VEVENT');
-  lines.push(`UID:${id}@booking`);
-  lines.push(`DTSTAMP:${dtStamp}`);
-  lines.push(`DTSTART:${dtStart}`);
-  lines.push(`DTEND:${dtEnd}`);
-  lines.push(`SUMMARY:Booking for ${spaceName}`);
-  lines.push(`LOCATION:${spaceName}`);
-  if (name && email) {
-    // RFC5545 requires escaping commas and semicolons in CN
-    const cn = String(name).replace(/[,;]/g, '\\$&');
-    lines.push(`ORGANIZER;CN=${cn}:MAILTO:${email}`);
-  }
-  lines.push(`DESCRIPTION:Office booking for ${spaceName}`);
-  if (cancelled) {
-    lines.push('STATUS:CANCELLED');
-    lines.push('SEQUENCE:1');
-  }
-  lines.push('END:VEVENT');
-  lines.push('END:VCALENDAR');
-  return lines.join('\r\n');
-}
+*/
 
 function adminAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -578,31 +880,42 @@ function adminAuth(req, res, next) {
   req.adminId = adminId;
   const admin = admins.find(a => a.id === adminId);
   req.admin = admin;
-  req.adminRole = admin && admin.role ? admin.role : 'admin';
+  // Assign a normalized role.  Some older deployments used a "super" or
+  // "superadmin" role name which was not recognised by the access control
+  // checks throughout the server (e.g. analytics and kiosk endpoints
+  // explicitly check for 'owner', 'admin' or 'analyst').  When an admin has
+  // one of these legacy roles we treat them as an owner.  Otherwise fall
+  // back to the stored role or 'admin' by default.
+  let role = admin && admin.role ? admin.role : 'admin';
+  if (role && typeof role === 'string') {
+    const r = role.toLowerCase();
+    if (r === 'super' || r === 'superadmin') role = 'owner';
+    else role = role; // leave unchanged
+  }
+  req.adminRole = role;
   next();
 }
 
 // ----- API routes -----------------------------------------------------------
-
-// Admin login
+// Admin login endpoint
 app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  const admin = admins.find(a => a.username === username);
-  // If admin found, verify password using hashed or plain comparison
-  if (!admin || !verifyPassword(password, admin)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Missing username or password' });
+    }
+    const uname = String(username).toLowerCase();
+    const admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
+    if (!admin || !verifyPassword(password, admin)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    const token = uuidv4();
+    tokens[token] = admin.id;
+    return res.json({ token, role: admin.role || 'admin' });
+  } catch (e) {
+    console.error('Login error', e);
+    return res.status(500).json({ error: 'Login failed' });
   }
-  // If admin has plain password but no hash, upgrade to hashed credentials
-  if (!admin.passwordHash || !admin.salt) {
-    const creds = hashPassword(password);
-    admin.passwordHash = creds.hash;
-    admin.salt = creds.salt;
-    delete admin.password;
-    saveData();
-  }
-  const token = uuidv4();
-  tokens[token] = admin.id;
-  res.json({ token });
 });
 
 // Spaces endpoints
@@ -645,7 +958,7 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 // Bookings endpoints
 app.get('/api/bookings', adminAuth, (req, res) => {
   // Only owners and admins can list all bookings
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const result = bookings.map(b => {
@@ -659,13 +972,76 @@ app.get('/api/bookings', adminAuth, (req, res) => {
       date: b.date,
       startTime: b.startTime,
       endTime: b.endTime,
-      // boolean flag for legacy clients
       recurring: !!b.recurring,
-      // include the full recurrence object for front‑end formatting
-      recurrence: b.recurring || null
+      recurrence: b.recurring || null,
+      checkedIn: !!b.checkedIn
     };
   });
-  res.json(result);
+
+  // Optional filters & pagination
+  const hasQueryControls = (
+    typeof req.query.upcoming !== 'undefined' ||
+    typeof req.query.from !== 'undefined' ||
+    typeof req.query.sort !== 'undefined' ||
+    typeof req.query.limit !== 'undefined' ||
+    typeof req.query.offset !== 'undefined' ||
+    typeof req.query.page !== 'undefined' ||
+    typeof req.query.pageSize !== 'undefined'
+  );
+
+  if (!hasQueryControls) {
+    // Back-compat: return the full array exactly as before
+    return res.json(result);
+  }
+
+  // Parse query params
+  const q = req.query;
+  const sortDir = (q.sort || 'asc').toString().toLowerCase() === 'desc' ? 'desc' : 'asc';
+  let items = result.slice();
+
+  // Apply "upcoming" filter (from now onwards)
+  if (typeof q.upcoming !== 'undefined') {
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0,10);
+    const hh = String(now.getHours()).padStart(2,'0');
+    const mm = String(now.getMinutes()).padStart(2,'0');
+    const cur = `${hh}:${mm}`;
+    items = items.filter(b => {
+      if (b.date > todayStr) return true;
+      if (b.date === todayStr && (b.endTime || '00:00') >= cur) return true;
+      // If a booking is recurring but started in the past, it's ambiguous whether to include;
+      // keep it out by default to avoid flooding the list with base patterns.
+      return false;
+    });
+  }
+
+  // Apply "from" filter if provided, expects YYYY-MM-DD
+  if (q.from) {
+    const fromStr = q.from.toString();
+    items = items.filter(b => b.date >= fromStr);
+  }
+
+  // Sort by date then startTime
+  items.sort((a,b) => {
+    const k1 = a.date.localeCompare(b.date);
+    if (k1 !== 0) return sortDir === 'asc' ? k1 : -k1;
+    const k2 = (a.startTime||'00:00').localeCompare(b.startTime||'00:00');
+    return sortDir === 'asc' ? k2 : -k2;
+  });
+
+  // Pagination
+  const pageSize = q.pageSize ? Math.max(1, parseInt(q.pageSize,10)) : (q.limit ? Math.max(1, parseInt(q.limit,10)) : 100);
+  const page = q.page ? Math.max(1, parseInt(q.page,10)) : null;
+  let offset = 0;
+  if (page) {
+    offset = (page - 1) * pageSize;
+  } else if (q.offset) {
+    offset = Math.max(0, parseInt(q.offset,10));
+  }
+  const total = items.length;
+  const sliced = items.slice(offset, offset + pageSize);
+
+  return res.json({ items: sliced, total, offset, page: page || null, pageSize });
 });
 
 /**
@@ -694,6 +1070,20 @@ app.post('/api/bookings', (req, res) => {
   const space = spaces.find(s => s.id === spaceId);
   if (!space) {
     return res.status(404).json({ error: 'Space not found' });
+  }
+
+  // Prevent bookings in the past relative to America/New_York timezone.  Compute
+  // the selected start datetime and compare against the current Eastern time.
+  // This ensures server‑side enforcement even if the client omits the check.
+  try {
+    const selectedStart = new Date(`${date}T${startTime}:00`);
+    const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const easternNow = new Date(easternNowStr);
+    if (selectedStart < easternNow) {
+      return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+    }
+  } catch (err) {
+    // ignore date parsing errors
   }
   // Enforce maximum booking duration for single and recurring bookings
   const [sh, sm] = startTime.split(':').map(x => parseInt(x, 10));
@@ -724,39 +1114,50 @@ app.post('/api/bookings', (req, res) => {
     return res.status(400).json({ error: 'Recurring booking conflicts with an existing booking in a future period' });
   }
   const id = uuidv4();
-  bookings.push({ id, name, email: emailNormalized, spaceId, date, startTime, endTime, recurring: rec, checkedIn: false });
+  const booking = {
+    id,
+    name,
+    email: emailNormalized,
+    spaceId,
+    date,
+    startTime,
+    endTime,
+    recurring: rec,
+    checkedIn: false
+  };
+  bookings.push(booking);
   // Persist changes
   saveData();
-  // Build a cancellation link. If APP_BASE_URL is set, use it; otherwise omit the URL.
-  let cancelLink = '';
-  if (APP_BASE_URL) {
-    cancelLink = `${APP_BASE_URL}/cancel/${id}`;
-  }
-  // Create plain text confirmation message
-  const confirmationMessage =
-    `Your booking for ${space.name}${rec ? ' (recurring)' : ''} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
-    (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
-  // Generate an iCalendar attachment for the booking (first occurrence only)
-  let attachments = [];
-  try {
-    const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-    attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
-  } catch (err) {
-    console.error('Failed to generate iCalendar attachment:', err);
-  }
-  sendEmail(
-    emailNormalized,
-    'Booking Confirmation',
-    confirmationMessage,
-    attachments
-  );
+  // Send booking confirmation email asynchronously.  Construct a cancel URL
+  // using either APP_BASE_URL (when set) or the current request's host.  The
+  // confirmation includes basic booking details and a cancel link.
+  (async () => {
+    try {
+      const spaceName = spaces.find(s => s.id === spaceId)?.name || spaceId;
+      const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+      const cancelLink = `${baseUrl}/cancel/${id}`;
+      const emailText =
+        `Hello ${name},\n\n` +
+        `Your booking has been confirmed!\n\n` +
+        `Space: ${spaceName}\n` +
+        `Date: ${date}\n` +
+        `Start Time: ${startTime}\n` +
+        `End Time: ${endTime}\n\n` +
+        `If you need to cancel your booking, please click the link below:\n` +
+        `${cancelLink}\n\n` +
+        `Thank you.`;
+      await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+    } catch (err) {
+      console.error('Error sending booking confirmation', err);
+    }
+  })();
   res.json({ id });
 });
 
 // Cancel a booking by ID (admin only)
 app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   // Only owners and admins can delete bookings
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -764,26 +1165,6 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
     const space = spaces.find(s => s.id === removed.spaceId);
-    // Build cancellation email and iCalendar cancel attachment
-    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
-    let attachments = [];
-    try {
-      const icsCancel = generateICS(
-        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
-        space ? space.name : 'a space',
-        'CANCEL',
-        true
-      );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
-    } catch (err) {
-      console.error('Failed to generate cancellation iCalendar attachment:', err);
-    }
-    sendEmail(
-      removed.email,
-      'Booking Cancelled',
-      cancelMsg,
-      attachments
-    );
     // Persist changes
     saveData();
     res.json({ ok: true });
@@ -800,30 +1181,6 @@ app.get('/cancel/:id', (req, res) => {
   const index = bookings.findIndex(b => b.id === id);
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
-    saveData();
-    const space = spaces.find(s => s.id === removed.spaceId);
-    // Send cancellation email to the user with iCalendar cancel attachment
-    const cancelMsg = `Your booking for ${space ? space.name : 'a space'} on ${removed.date} from ${to12Hour(removed.startTime)} to ${to12Hour(removed.endTime)} has been cancelled.`;
-    let attachments = [];
-    try {
-      const icsCancel = generateICS(
-        { id: removed.id, date: removed.date, startTime: removed.startTime, endTime: removed.endTime, name: removed.name, email: removed.email },
-        space ? space.name : 'a space',
-        'CANCEL',
-        true
-      );
-      attachments.push({ filename: 'booking_cancel.ics', content: icsCancel, contentType: 'text/calendar' });
-    } catch (err) {
-      console.error('Failed to generate cancellation iCalendar attachment:', err);
-    }
-    sendEmail(removed.email, 'Booking Cancelled', cancelMsg, attachments);
-    res.send(
-      '<html><head><title>Booking Cancelled</title></head><body>' +
-      '<h1>Booking Cancelled</h1>' +
-      '<p>Your booking has been cancelled successfully.</p>' +
-      '</body></html>'
-    );
-  } else {
     res.status(404).send(
       '<html><head><title>Booking Not Found</title></head><body>' +
       '<h1>Booking Not Found</h1>' +
@@ -862,36 +1219,60 @@ app.get('/api/bookings/auto', (req, res) => {
   if (!emailNormalized.endsWith('@fbhi.net')) {
     return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
   }
+
+  // Prevent bookings in the past relative to America/New_York timezone.  Compute
+  // the selected start datetime and compare against the current Eastern time.
+  try {
+    const selectedStart = new Date(`${date}T${startTime}:00`);
+    const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const easternNow = new Date(easternNowStr);
+    if (selectedStart < easternNow) {
+      return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+    }
+  } catch (err) {
+    // ignore parse errors
+  }
   const candidates = spaces
     .filter(s => s.type === type)
     .sort((a, b) => a.priorityOrder - b.priorityOrder);
   for (const space of candidates) {
     if (isSpaceAvailable(space.id, date, startTime, endTime)) {
       const id = uuidv4();
-      bookings.push({ id, name, email: emailNormalized, spaceId: space.id, date, startTime, endTime, recurring: false, checkedIn: false });
+      const booking = {
+        id,
+        name,
+        email: emailNormalized,
+        spaceId: space.id,
+        date,
+        startTime,
+        endTime,
+        recurring: false,
+        checkedIn: false
+      };
+      bookings.push(booking);
       // Persist immediately so that cancellation link works even if the process restarts
       saveData();
-      // Construct cancellation link
-      let cancelLink = '';
-      if (APP_BASE_URL) {
-        cancelLink = `${APP_BASE_URL}/cancel/${id}`;
-      }
-      const confirmationMessage =
-        `Your booking for ${space.name} on ${date} from ${to12Hour(startTime)} to ${to12Hour(endTime)} has been confirmed.` +
-        (cancelLink ? `\n\nIf you need to cancel this booking, please click the following link: ${cancelLink}` : '');
-      let attachments = [];
-      try {
-        const icsContent = generateICS({ id, date, startTime, endTime, name, email: emailNormalized }, space.name, 'REQUEST', false);
-        attachments.push({ filename: 'booking.ics', content: icsContent, contentType: 'text/calendar' });
-      } catch (err) {
-        console.error('Failed to generate iCalendar attachment:', err);
-      }
-      sendEmail(
-        emailNormalized,
-        'Booking Confirmation',
-        confirmationMessage,
-        attachments
-      );
+      // Send booking confirmation email asynchronously
+      (async () => {
+        try {
+          const spaceName = space.name;
+          const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+          const cancelLink = `${baseUrl}/cancel/${id}`;
+          const emailText =
+            `Hello ${name},\n\n` +
+            `Your booking has been confirmed!\n\n` +
+            `Space: ${spaceName}\n` +
+            `Date: ${date}\n` +
+            `Start Time: ${startTime}\n` +
+            `End Time: ${endTime}\n\n` +
+            `If you need to cancel your booking, please click the link below:\n` +
+            `${cancelLink}\n\n` +
+            `Thank you.`;
+          await sendEmail(emailNormalized, 'Booking Confirmation', emailText);
+        } catch (err) {
+          console.error('Error sending booking confirmation (auto)', err);
+        }
+      })();
       return res.json({ id, spaceName: space.name });
     }
   }
@@ -901,7 +1282,7 @@ app.get('/api/bookings/auto', (req, res) => {
 // Admin user management
 app.get('/api/admins', adminAuth, (req, res) => {
   // Only owners and admins can list admin users
-  if (!['owner','admin'].includes(req.adminRole)) {
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(admins.map(a => ({ id: a.id, username: a.username, role: a.role || 'admin' })));
@@ -909,7 +1290,7 @@ app.get('/api/admins', adminAuth, (req, res) => {
 
 app.post('/api/admins', adminAuth, (req, res) => {
   // Only owners can add new admins
-  if (req.adminRole !== 'owner') {
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { username, password, role } = req.body;
@@ -933,7 +1314,7 @@ app.post('/api/admins', adminAuth, (req, res) => {
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
   // Only owners can delete admins
-  if (req.adminRole !== 'owner') {
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -1288,6 +1669,7 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
     const e = new Date(end);
     if (!isNaN(s.getTime()) && !isNaN(e.getTime()) && s <= e) {
       startDate = s;
+      // Include entire end day
       endDate = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
     }
   }
@@ -1319,89 +1701,61 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
       }
     }
   }
-  // Compute analytics per user for offices
-  const analyticsMap = {};
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const officeBookings = bookings.filter(b => {
+  // Build CSV of all bookings (past and future) within the selected period.
+  // Each row represents a single booking occurrence (including future
+  // occurrences of recurring bookings) and includes the date, user, space,
+  // start and end times, and check‑in status.  This replaces the
+  // aggregated per‑user analytics previously returned.
+  const headers = ['Date','Name','Email','Space','Start','End','CheckedIn'];
+  const rows = [headers.join(',')];
+  // Helper to escape CSV fields
+  function escapeCsv(value) {
+    const s = String(value);
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? '"' + s.replace(/"/g, '""') + '"'
+      : s;
+  }
+  // Iterate through all bookings (all spaces) and generate rows
+  bookings.forEach(b => {
     const space = spaces.find(s => s.id === b.spaceId);
-    return space && space.type === 'office';
-  });
-  officeBookings.forEach(b => {
-    const email = b.email;
-    if (!analyticsMap[email]) {
-      analyticsMap[email] = {
-        email,
-        dayCounts: { Sunday: 0, Monday: 0, Tuesday: 0, Wednesday: 0, Thursday: 0, Friday: 0, Saturday: 0 },
-        bookingsCount: 0,
-        totalMinutesCheckIn: 0,
-        totalMinutesNoCheckIn: 0,
-        checkIns: 0,
-        noCheckIns: 0
-      };
-    }
-    const entry = analyticsMap[email];
+    const spaceName = space ? space.name : b.spaceId;
     function processOccurrence(dateStr) {
       const d = new Date(dateStr);
-      if (isNaN(d.getTime()) || d < startDate || d > endDate) return;
-      const dow = d.getDay();
-      entry.dayCounts[dayNames[dow]]++;
-      entry.bookingsCount++;
-      const [sh, sm] = b.startTime.split(':').map(x => parseInt(x, 10));
-      const [eh, em] = b.endTime.split(':').map(x => parseInt(x, 10));
-      if (!isNaN(sh) && !isNaN(sm) && !isNaN(eh) && !isNaN(em)) {
-        let diff = (eh * 60 + em) - (sh * 60 + sm);
-        if (diff < 0) diff = 0;
-        if (b.checkedIn) entry.totalMinutesCheckIn += diff;
-        else entry.totalMinutesNoCheckIn += diff;
-      }
-      if (b.checkedIn) entry.checkIns++;
-      else entry.noCheckIns++;
+      if (isNaN(d.getTime())) return;
+      if (d < startDate || d > endDate) return;
+      const row = [
+        dateStr,
+        b.name,
+        b.email,
+        spaceName,
+        b.startTime,
+        b.endTime,
+        b.checkedIn ? 'Yes' : 'No'
+      ];
+      rows.push(row.map(escapeCsv).join(','));
     }
     if (b.recurring && typeof b.recurring === 'object') {
+      // Generate occurrences for recurring bookings within the range
       const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
       const endIter = new Date(endDate);
       startIter.setHours(0,0,0,0);
       endIter.setHours(0,0,0,0);
       const currentDate = new Date(startIter);
       while (currentDate <= endIter) {
-        const dateStr = currentDate.toISOString().slice(0, 10);
+        const dateStr = currentDate.toISOString().slice(0,10);
         if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
           processOccurrence(dateStr);
         }
         currentDate.setDate(currentDate.getDate() + 1);
       }
     } else {
+      // Single booking
       processOccurrence(b.date);
     }
   });
-  // Build CSV
-  const headers = ['Email','Sun','Mon','Tue','Wed','Thu','Fri','Sat','Bookings','CheckInHours','NoShowHours','CheckIns','NoCheckIns'];
-  const rows = [headers.join(',')];
-  Object.values(analyticsMap).forEach(e => {
-    const row = [
-      e.email,
-      e.dayCounts['Sunday'],
-      e.dayCounts['Monday'],
-      e.dayCounts['Tuesday'],
-      e.dayCounts['Wednesday'],
-      e.dayCounts['Thursday'],
-      e.dayCounts['Friday'],
-      e.dayCounts['Saturday'],
-      e.bookingsCount,
-      (e.totalMinutesCheckIn / 60).toFixed(2),
-      (e.totalMinutesNoCheckIn / 60).toFixed(2),
-      e.checkIns,
-      e.noCheckIns
-    ];
-    const escaped = row.map(field => {
-      const s = String(field);
-      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
-    });
-    rows.push(escaped.join(','));
-  });
   const csv = rows.join('\r\n');
   res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="analytics.csv"');
+  res.setHeader('Content-Disposition', 'attachment; filename="bookings.csv"');
   res.send(csv);
 });
 
@@ -1412,7 +1766,9 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
 // devices and codes. Because codes effectively authenticate kiosk
 // devices, they should be treated as secrets and only visible to admins.
 app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Permit superadmins to manage kiosk tokens as well.  Previously superadmins
+  // were excluded which prevented them from viewing tokens in the settings UI.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(kioskTokens);
@@ -1423,7 +1779,8 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // the kiosk device, while the code is shared with the device during
 // setup. The token remains valid until explicitly revoked by an admin.
 app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow superadmins to generate kiosk tokens in addition to owners and admins.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const id = uuidv4();
@@ -1438,7 +1795,9 @@ app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
 // does not remove the cookie from the client; instead the server simply
 // stops recognising the token.
 app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow superadmins to revoke kiosk tokens.  Without this, superadmins
+  // could not perform deletions in the admin settings page.
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -1498,18 +1857,21 @@ app.post('/api/request-verification', (req, res) => {
   // Generate a unique token and store mapping to email
   const token = uuidv4();
   verificationTokens[token] = emailNormalized;
-  // Build verification link
-  let verifyLink = '';
+  // Build a verification link.  Prefer the configured APP_BASE_URL when provided.
+  // Otherwise construct an absolute URL using the current request's protocol and host.
+  let verifyLink;
   if (APP_BASE_URL) {
     verifyLink = `${APP_BASE_URL}/verify-email/${token}`;
   } else {
-    // Fallback to relative path (useful when running locally)
-    verifyLink = `/verify-email/${token}`;
+    verifyLink = `${req.protocol}://${req.get('host')}/verify-email/${token}`;
   }
   const message =
     `Please verify your email address by clicking the following link:\n\n${verifyLink}\n\n` +
     `Once verified, you will be able to book spaces on the booking site.`;
-  sendEmail(emailNormalized, 'Email Verification', message);
+  // Fire and forget verification email; log any failures
+  sendEmail(emailNormalized, 'Email Verification', message).catch(err => {
+    console.error('Failed to send verification email:', err);
+  });
   res.json({ ok: true });
 });
 
@@ -1553,7 +1915,79 @@ app.get('/verify-email/:token', (req, res) => {
   res.send(html);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Booking app listening at http://localhost:${PORT}`);
+// Start server after initialising the database and loading data.  Because
+// database operations are asynchronous we perform them in an immediately
+// invoked async function.  If any of the setup steps fail the error is
+// logged and the server will still start with the in‑memory defaults.
+(async () => {
+  try {
+    await initDb();
+    await loadData();
+  } catch (err) {
+    console.error('Initialisation error:', err);
+  }
+  
+// === TEMPORARY BOOTSTRAP ADMIN ROUTE (DELETE AFTER USE) ===
+// NOTE: uuidv4 is already imported at top of file.
+app.post('/api/bootstrap-admin', async (req, res) => {
+  try {
+    const { token, username, password, role = 'admin' } = req.body || {};
+
+    // Require a bootstrap token so this isn't a public backdoor
+    if (!process.env.BOOTSTRAP_TOKEN || token !== process.env.BOOTSTRAP_TOKEN) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
+    }
+
+    if (!username || !password) {
+      return res.status(400).json({ ok: false, error: 'username and password required' });
+    }
+
+    // Validate role if provided
+    const adminRole = (typeof role === 'string' ? role : 'admin');
+    if (typeof ROLES !== 'undefined' && Array.isArray(ROLES) && !ROLES.includes(adminRole)) {
+      return res.status(400).json({ ok: false, error: 'invalid role' });
+    }
+
+    // Use the SAME hashing code the app uses
+    const { hash, salt } = hashPassword(password);
+
+    const id = uuidv4();
+
+    let dbRow = null;
+
+    if (db) {
+      const text = `
+        INSERT INTO admins (id, username, "passwordHash", salt, role)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (username) DO UPDATE
+          SET "passwordHash" = EXCLUDED."passwordHash",
+              salt = EXCLUDED.salt,
+              role = EXCLUDED.role
+        RETURNING id, username, role;`;
+      const values = [id, username, hash, salt, adminRole];
+      const result = await db.query(text, values);
+      dbRow = result && result.rows && result.rows[0] ? result.rows[0] : null;
+    }
+
+    // Update in‑memory cache
+    if (Array.isArray(admins)) {
+      const i = admins.findIndex(a => a.username === username);
+      const adminRow = { id: (dbRow?.id || id), username, passwordHash: hash, salt, role: adminRole };
+      if (i >= 0) admins[i] = adminRow; else admins.push(adminRow);
+      // Persist JSON snapshot as well
+      try { saveData(); } catch (_) {}
+    }
+
+    const responseAdmin = dbRow ? dbRow : { id: id, username, role: adminRole };
+    return res.json({ ok: true, admin: responseAdmin });
+  } catch (err) {
+    console.error('bootstrap-admin error', err);
+    return res.status(500).json({ ok: false, error: 'internal-error' });
+  }
 });
+// === END TEMPORARY ROUTE ===
+
+app.listen(PORT, () => {
+    console.log(`Booking app listening at http://localhost:${PORT}`);
+  });
+})();

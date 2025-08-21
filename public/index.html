@@ -7,7 +7,17 @@
   <style>
     body { font-family: Arial, sans-serif; background: #f9f9f9; margin: 0; padding: 20px; }
     h1 { text-align: center; color: #333; }
-    .card { background: white; padding: 20px; margin: 0 auto; max-width: 500px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    /* Cards should flex gracefully on small screens.  Set a max width and
+       allow them to fill available width on mobile devices. */
+    .card {
+      background: white;
+      padding: 20px;
+      margin: 0 auto 20px auto;
+      width: 100%;
+      max-width: 600px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
     .field { margin-bottom: 12px; }
     label { display: block; margin-bottom: 4px; color: #555; }
     input[type="text"], input[type="email"], input[type="date"], select {
@@ -23,6 +33,21 @@
     /* Styles for availability results */
     .yes { color: #2e7d32; font-weight: bold; }
     .no { color: #c62828; font-weight: bold; }
+    /* Table styles for aggregated availability */
+    table.availability-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    table.availability-table th,
+    table.availability-table td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    table.availability-table th {
+      background: #fafafa;
+    }
   </style>
 </head>
 <body>
@@ -339,13 +364,17 @@
       }
     }
 
-    // Generate time slots in 30 minute increments between 08:00 and 18:00
+    // Generate time slots in 30 minute increments for a full day (00:00 - 24:00).
+    // Each slot is an object with a start and end time in HH:MM format. We do
+    // this client‑side and later group contiguous slots with identical
+    // availability into longer segments for display.
     function generateTimeSlots() {
       const slots = [];
       const pad = n => String(n).padStart(2, '0');
-      for (let hour = 8; hour < 18; hour++) {
+      for (let hour = 0; hour < 24; hour++) {
         const h1 = pad(hour);
-        const h2 = pad(hour + 1);
+        const h2 = pad((hour + 1) % 24);
+        // two 30‑minute chunks per hour
         slots.push({ start: `${h1}:00`, end: `${h1}:30` });
         slots.push({ start: `${h1}:30`, end: `${h2}:00` });
       }
@@ -398,16 +427,36 @@
         return { start, end, available: isAvail };
       });
       const results = await Promise.all(promises);
-      // Build table output
+      // Group contiguous slots into availability segments.  This reduces the
+      // number of rows and makes it clear when the space is free or
+      // unavailable.  We rely on the slots being ordered chronologically.
+      const segments = [];
+      let current = null;
+      results.forEach(r => {
+        if (!current) {
+          current = { start: r.start, end: r.end, available: r.available };
+        } else if (r.available === current.available) {
+          // Extend the current segment
+          current.end = r.end;
+        } else {
+          segments.push(current);
+          current = { start: r.start, end: r.end, available: r.available };
+        }
+      });
+      if (current) segments.push(current);
+      // Build table output for aggregated segments
       const table = document.createElement('table');
+      table.className = 'availability-table';
       const thead = document.createElement('thead');
-      thead.innerHTML = '<tr><th>Time</th><th>Available</th></tr>';
+      thead.innerHTML = '<tr><th>Time Range</th><th>Status</th></tr>';
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
-      results.forEach(r => {
+      segments.forEach(seg => {
         const tr = document.createElement('tr');
-        const timeLabel = `${to12Hour(r.start)} - ${to12Hour(r.end)}`;
-        tr.innerHTML = `<td>${timeLabel}</td><td class="${r.available ? 'yes' : 'no'}">${r.available ? 'Yes' : 'No'}</td>`;
+        const rangeLabel = `${to12Hour(seg.start)} - ${to12Hour(seg.end)}`;
+        const statusLabel = seg.available ? 'Available' : 'Unavailable';
+        const statusClass = seg.available ? 'yes' : 'no';
+        tr.innerHTML = `<td>${rangeLabel}</td><td class="${statusClass}">${statusLabel}</td>`;
         tbody.appendChild(tr);
       });
       table.appendChild(tbody);

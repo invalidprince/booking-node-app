@@ -18,6 +18,11 @@
     .recurrence-controls label { margin-left: 4px; }
     /* Timepicker dropdown styling (copied from main booking page) */
     .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
+
+    /* Simple date picker dropdown for admin bookings.  It mirrors the custom time
+       picker styling and provides basic selects for month/day/year when the
+       native date input cannot be used. */
+    .datepicker-dropdown select { margin-right: 4px; padding: 4px; }
   </style>
 </head>
 <body>
@@ -27,47 +32,25 @@
     <div class="row">
       <input id="username" placeholder="Username (admin@example.com)">
       <input id="password" placeholder="Password (admin123)" type="password">
-      <button id="loginBtn">Login</button>
+      <!-- Prevent accidental form-submit reloads -->
+      <button id="loginBtn" type="button">Login</button>
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
-
-  <div id="app" class="hidden">
-    <div class="card">
-      <button id="logoutBtn">Logout</button>
-    </div>
-
-    <!-- Spaces management -->
-    <div class="card">
-      <h2>Spaces</h2>
-      <div class="row">
-        <input id="spaceName" placeholder="Name">
-        <select id="spaceType">
-          <option value="desk">Desk</option>
-          <option value="office">Office</option>
-          <option value="conference">Conference</option>
-        </select>
-        <input id="spacePriority" type="number" placeholder="Priority (1 = highest)" value="1" min="1">
-        <button id="addSpaceBtn">Add Space</button>
-      </div>
-      <table id="spacesTable">
-        <thead>
-          <tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <!-- Bookings management -->
-    <div class="card">
+  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
       <h2>Bookings</h2>
       <div class="row">
         <input id="bName" placeholder="Name">
         <input id="bEmail" placeholder="Email">
-        <input id="bDate" type="date">
+        <!-- Use a native date input for the booking date just like the main booking page.
+             The built‑in browser calendar allows admins to pick a date via a calendar overlay.
+             A simple `<input type="date">` provides a familiar calendar widget. -->
+        <input id="bDate" type="date" placeholder="Date">
         <input id="bStart" placeholder="Start Time" readonly>
         <input id="bEnd" placeholder="End Time" readonly>
-        <select id="bSpace"></select>
+        <!-- The space selector for new bookings.  Set a minimum width so the dropdown
+             is always visible even when no options have been loaded yet. -->
+        <select id="bSpace" style="min-width:140px;"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
       <!-- Recurrence controls -->
@@ -97,6 +80,14 @@
           <option value="6">Saturday</option>
         </select>
       </div>
+      <div class="row" style="justify-content: space-between; align-items: center; margin: 8px 0;">
+        <div><strong>Bookings (upcoming)</strong></div>
+        <div>
+          <button id="prevPageBtn">&lt; Prev</button>
+          <span id="pageInfo" style="margin:0 8px;"></span>
+          <button id="nextPageBtn">Next &gt;</button>
+        </div>
+      </div>
       <table id="bookingsTable">
         <thead>
           <tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Recurring</th><th>Action</th></tr>
@@ -106,28 +97,6 @@
     </div>
 
     <!-- Admin user management -->
-    <div class="card">
-      <h2>Admin Users</h2>
-      <div class="row">
-        <input id="aUser" placeholder="username (email)">
-        <input id="aPass" placeholder="password">
-        <!-- Role selection for new admin users -->
-        <select id="aRole">
-          <option value="admin" selected>Admin</option>
-          <option value="analyst">Analyst</option>
-          <option value="frontdesk">FrontDesk</option>
-        </select>
-        <button id="addAdminBtn">Add Admin</button>
-      </div>
-      <table id="adminsTable">
-        <thead>
-          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <!-- Analytics section -->
     <div class="card">
       <h2>Analytics</h2>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
@@ -147,24 +116,67 @@
     </div>
 
     <!-- Kiosk management section -->
-    <div class="card">
-      <h2>Kiosk Devices</h2>
-      <div class="row">
-        <button id="generateKioskBtn">Generate Token</button>
-      </div>
-      <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
-      <table id="kioskTokensTable">
-        <thead>
-          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
     </div>
-  </div>
-
-  <script>
+<script>
     let token = localStorage.getItem('adminToken') || '';
 
+    
+    // ---- injected utilities for split pages ----
+    function q(id){ return document.getElementById(id); }
+    function on(id, event, handler){
+      const el = q(id);
+      if (el && typeof el.addEventListener === 'function') el.addEventListener(event, handler);
+    }
+    function ensureSuperAdminIfNeeded(){
+      const role = localStorage.getItem('adminRole') || 'admin';
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return; // login flow will show app after auth
+      if (false && role !== 'superadmin') {
+        window.location.href = '/admin.html';
+      }
+    }
+    function updateSettingsLinkIfNeeded(){
+      const right = document.getElementById('rightActions');
+      if (!right) return;
+      right.innerHTML = '';
+      const role = localStorage.getItem('adminRole') || 'admin';
+      if (!false && role === 'superadmin'){
+        const a = document.createElement('a');
+        a.href = '/admin-settings.html';
+        a.title = 'Settings';
+        a.textContent = '⚙️ Settings';
+        a.style.textDecoration = 'none';
+        a.style.fontSize = '14px';
+        right.appendChild(a);
+      }
+    }
+    // ---- end utilities ----
+    
+    
+    // ---- injected utilities for split pages ----
+    function ensureSuperAdminIfNeeded(){
+      const role = localStorage.getItem('adminRole') || 'admin';
+      const token = localStorage.getItem('adminToken') || '';
+      if (!token) return;
+      if (false && role !== 'superadmin') { window.location.href = '/admin.html'; }
+    }
+    function updateSettingsLinkIfNeeded(){
+      const right = document.getElementById('rightActions');
+      if (!right) return;
+      right.innerHTML = '';
+      const role = localStorage.getItem('adminRole') || 'admin';
+      if (!false && role === 'superadmin'){
+        const a = document.createElement('a');
+        a.href = '/admin-settings.html';
+        a.title = 'Settings';
+        a.textContent = '⚙️ Settings';
+        a.style.textDecoration = 'none';
+        a.style.fontSize = '14px';
+        right.appendChild(a);
+      }
+    }
+    // ---- end utilities ----
+    
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
@@ -172,32 +184,81 @@
       return opts;
     }
 
-    async function login() {
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value.trim();
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        token = data.token;
-        localStorage.setItem('adminToken', token);
-        document.getElementById('loginCard').classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
-        await refreshAll();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Login failed' }));
-        document.getElementById('loginStatus').textContent = err.error || 'Login failed';
+    // Logout helper. Removes the stored admin token and returns the user to
+    // the public booking page. Without this function the page attempted to
+    // bind a click handler to an undefined `logout` symbol, causing the
+    // remainder of the admin script to abort before any of the booking
+    // functionality could initialise. See the bottom of this file where
+    // `logoutBtn` is wired up.
+    function logout() {
+      try {
+        localStorage.removeItem('adminToken');
+        localStorage.removeItem('adminRole');
+        token = '';
+      } catch (_) {
+        // ignore storage errors
+      }
+      // Navigate back to the main page
+      window.location.href = 'index.html';
+    }
+
+    // Accept an optional event parameter so that we can prevent default behaviour.
+    async function login(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const status = document.getElementById('loginStatus');
+      status.textContent = '';
+      btn.disabled = true;
+      try {
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value.trim();
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        let data = {};
+        try { data = await res.clone().json(); } catch (_) {}
+        if (res.ok && data && data.token) {
+          token = data.token;
+          localStorage.setItem('adminToken', token);
+          if (data && data.role) localStorage.setItem('adminRole', data.role);
+          if (data && data.role) localStorage.setItem('adminRole', data.role);
+          document.getElementById('loginCard').classList.add('hidden');
+          document.getElementById('app').classList.remove('hidden');
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
+          await refreshAll();
+        } else {
+          if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
+          else if (res.status === 403) status.textContent = data.error || 'Access forbidden';
+          else status.textContent = (data && data.error) || `Login failed (HTTP ${res.status})`;
+        }
+      } catch (e) {
+        console.error('Login error', e);
+        status.textContent = 'Login error. See console for details.';
+      } finally {
+        btn.disabled = false;
       }
     }
 
-    async function refreshAll() {
-      await loadSpaces();
-      await loadBookings();
-      await loadAdmins();
-      await loadKioskTokens();
+    // Refresh all admin data after login.  The original implementation only
+    // loaded bookings, which meant the space selector remained empty until
+    // a separate call to loadSpaces() was made.  Without an option selected
+    // the Add Booking form cannot be submitted.  Load spaces before
+    // bookings so the dropdown is populated.
+    async function refreshAll(){
+      try {
+        if (typeof loadSpaces === 'function') {
+          await loadSpaces();
+        }
+        await loadBookings();
+      } catch (e) {
+        console.error('refreshAll error', e);
+        await loadBookings();
+      }
     }
 
     // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
@@ -273,6 +334,90 @@
       });
     }
 
+    // Create a simple date picker for inputs that should accept dates in YYYY-MM-DD
+    // format.  The native `<input type="date">` control is not reliable across
+    // all browsers or on remote sessions, so this helper shows a small dropdown
+    // with separate selects for month, day and year.  Selecting a date sets
+    // the corresponding text field's value (ISO format) and hides the picker.
+    function createDatePicker(inputId) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      // Container for the dropdown
+      const container = document.createElement('div');
+      container.className = 'datepicker-dropdown';
+      container.style.position = 'absolute';
+      container.style.display = 'none';
+      container.style.background = '#fff';
+      container.style.border = '1px solid #ccc';
+      container.style.padding = '6px';
+      container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+      container.style.zIndex = 1000;
+
+      // Month selector (1–12)
+      const monthSelect = document.createElement('select');
+      for (let m = 1; m <= 12; m++) {
+        const opt = document.createElement('option');
+        opt.value = m.toString().padStart(2, '0');
+        opt.textContent = opt.value;
+        monthSelect.appendChild(opt);
+      }
+
+      // Day selector (1–31).  We won't dynamically adjust day count per month; if
+      // the selected date does not exist (e.g. Feb 30) the server will reject
+      // it, but this still allows the admin to select any day quickly.
+      const daySelect = document.createElement('select');
+      for (let d = 1; d <= 31; d++) {
+        const opt = document.createElement('option');
+        opt.value = d.toString().padStart(2, '0');
+        opt.textContent = opt.value;
+        daySelect.appendChild(opt);
+      }
+
+      // Year selector.  Provide a range spanning from current year back one year
+      // and forward four years.  This should cover most booking windows but
+      // can be adjusted easily.
+      const yearSelect = document.createElement('select');
+      const currentYear = new Date().getFullYear();
+      for (let y = currentYear - 1; y <= currentYear + 4; y++) {
+        const opt = document.createElement('option');
+        opt.value = y;
+        opt.textContent = y;
+        if (y === currentYear) opt.selected = true;
+        yearSelect.appendChild(opt);
+      }
+
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const y = yearSelect.value;
+        const m = monthSelect.value;
+        const d = daySelect.value;
+        input.value = `${y}-${m}-${d}`;
+        container.style.display = 'none';
+      };
+      container.appendChild(monthSelect);
+      container.appendChild(daySelect);
+      container.appendChild(yearSelect);
+      container.appendChild(setBtn);
+
+      document.body.appendChild(container);
+
+      input.addEventListener('focus', () => {
+        const rect = input.getBoundingClientRect();
+        container.style.left = `${rect.left + window.scrollX}px`;
+        container.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        container.style.display = 'block';
+      });
+      // Hide the picker when clicking outside of the input or the container
+      document.addEventListener('click', (e) => {
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
+      });
+    }
+
     // Convert 24h time to 12h with AM/PM for display
     function to12Hour(time) {
       if (typeof time !== 'string' || !time.includes(':')) return time;
@@ -296,7 +441,7 @@
           return `Monthly – ${ordinal(rec.dayOfMonth)}`;
         }
         if (rec.nth !== undefined && rec.weekday !== undefined) {
-          return `Monthly – ${ordinalNth(rec.nth)} ${weekdayName(rec.weekday)}`;
+          return `Monthly – ${ordinal(rec.nth)} ${weekdayName(rec.weekday)}`;
         }
       }
       return '';
@@ -316,13 +461,6 @@
       return i + (s[(v - 20) % 10] || s[v] || s[0]);
     }
 
-    function ordinalNth(n) {
-      const i = parseInt(n, 10);
-      const ord = ordinal(i);
-      // Remove the numeric part, leave only the ordinal indicator
-      return ord;
-    }
-
     // Format date as "Weekday, MM/DD/YYYY"
     function formatDateWithDay(dateStr) {
       if (!dateStr) return dateStr;
@@ -335,16 +473,29 @@
     }
 
     async function loadSpaces() {
+      // Use authenticated headers when loading spaces. Without the auth header
+      // the server may return 401/403 and the dropdown remains empty. Passing
+      // the result of setAuthHeaders() will attach the Authorization header
+      // containing the current admin token. Note: GET is default.
+      // Fetch the list of spaces without requiring auth.  The spaces API is
+      // public (as seen on the booking page), so it’s safe to call it without
+      // credentials. Using an unauthenticated request also avoids cases where
+      // a valid token is not yet available when the page first loads.
       const res = await fetch('/api/spaces');
       const spaces = await res.json();
-      const tbody = document.querySelector('#spacesTable tbody');
-      tbody.innerHTML = '';
-      spaces.forEach(s => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
-          <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
-        tbody.appendChild(tr);
-      });
+      // If the settings table exists on this page, populate it.  The main admin
+      // panel does not include a spaces table (that lives on the settings
+      // page), so we need to guard against querying a non‑existent element.
+      const spacesTable = document.querySelector('#spacesTable tbody');
+      if (spacesTable) {
+        spacesTable.innerHTML = '';
+        spaces.forEach(s => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
+            <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
+          spacesTable.appendChild(tr);
+        });
+      }
       // Populate booking space selector
       const sSel = document.getElementById('bSpace');
       sSel.innerHTML = '';
@@ -373,61 +524,101 @@
     }
 
     async function loadBookings() {
-      const res = await fetch('/api/bookings', setAuthHeaders());
-      const bookings = await res.json();
-      const tbody = document.querySelector('#bookingsTable tbody');
-      tbody.innerHTML = '';
-      bookings.forEach(b => {
-        const tr = document.createElement('tr');
-        const start12 = to12Hour(b.startTime);
-        const end12 = to12Hour(b.endTime);
-        const dateFormatted = formatDateWithDay(b.date);
-        const recurrenceDesc = formatRecurrence(b.recurrence);
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12}</td><td>${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
-          <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
-        tbody.appendChild(tr);
-      });
+      if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+      const { offset, limit } = window._pageState;
+      fetch(`/api/bookings?upcoming=1&sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
+        .then(r => r.json())
+        .then(data => {
+          const items = Array.isArray(data) ? data : (data.items || []);
+          const total = Array.isArray(data) ? items.length : (data.total || items.length);
+          window._pageState.total = total;
+
+          const tbody = document.querySelector('#bookingsTable tbody');
+          tbody.innerHTML = '';
+          items.forEach(b => {
+            const tr = document.createElement('tr');
+            const start12 = to12Hour(b.startTime);
+            const end12 = to12Hour(b.endTime);
+            const dateFormatted = formatDateWithDay(b.date);
+            const recurrenceDesc = formatRecurrence(b.recurrence);
+            // Render the booking row with separate start and end time columns and a dedicated
+            // Action column for the cancel button.  Previously the start and end times were
+            // combined into a single cell and the cancel button leaked into the Recurring
+            // column, which caused the layout issues the user reported.
+            tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
+              `<td>${dateFormatted}</td>` +
+              `<td>${start12}</td>` +
+              `<td>${end12}</td>` +
+              `<td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>` +
+              `<td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
+            tbody.appendChild(tr);
+          });
+
+          // Update page info
+          const start = total === 0 ? 0 : (offset + 1);
+          const end = Math.min(offset + items.length, total);
+          document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
+
+          // Enable/disable buttons
+          document.getElementById('prevPageBtn').disabled = offset === 0;
+          document.getElementById('nextPageBtn').disabled = end >= total;
+        });
     }
 
+    // NEW: proper async addBooking implementation (fixes stray awaits)
     async function addBooking() {
-      const rawStart = document.getElementById('bStart').value;
-      const rawEnd = document.getElementById('bEnd').value;
-      const body = {
-        name: document.getElementById('bName').value.trim(),
-        email: document.getElementById('bEmail').value.trim(),
-        date: document.getElementById('bDate').value,
-        // Convert 12h input values to 24h for API submission
-        startTime: convertTo24h(rawStart),
-        endTime: convertTo24h(rawEnd),
-        spaceId: document.getElementById('bSpace').value
-      };
-      // Determine recurrence object
-      const recType = document.getElementById('bRecurrenceType').value;
-      let recurring = false;
-      if (recType === 'day') {
-        const day = document.getElementById('bRecurrenceDay').value;
-        if (day) {
-          recurring = { frequency: 'monthly', dayOfMonth: parseInt(day, 10) };
+      try {
+        const name = document.getElementById('bName').value.trim();
+        const email = document.getElementById('bEmail').value.trim();
+        const date = document.getElementById('bDate').value;
+        const startStr = document.getElementById('bStart').value;
+        const endStr = document.getElementById('bEnd').value;
+        const spaceId = document.getElementById('bSpace').value;
+
+        if (!name || !email || !date || !startStr || !endStr || !spaceId) {
+          alert('Please fill out name, email, date, start, end, and space.');
+          return;
         }
-      } else if (recType === 'weekday') {
-        const nth = document.getElementById('bRecurrenceNth').value;
-        const weekday = document.getElementById('bRecurrenceWeekday').value;
-        if (nth && weekday) {
-          recurring = { frequency: 'monthly', nth: parseInt(nth, 10), weekday: parseInt(weekday, 10) };
+
+        const startTime = convertTo24h(startStr);
+        const endTime = convertTo24h(endStr);
+
+        const body = { name, email, date, startTime, endTime, spaceId };
+
+        // Recurrence payload
+        const type = document.getElementById('bRecurrenceType').value;
+        if (type === 'day') {
+          const day = parseInt(document.getElementById('bRecurrenceDay').value, 10);
+          if (!isNaN(day)) body.recurrence = { frequency: 'monthly', dayOfMonth: day };
+        } else if (type === 'weekday') {
+          const nth = parseInt(document.getElementById('bRecurrenceNth').value, 10);
+          const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
+          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency: 'monthly', nth, weekday };
+        } else if (type === 'weekly') {
+          const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
+          if (!isNaN(weekday)) body.recurrence = { frequency: 'weekly', weekday };
         }
-      } else if (recType === 'weekly') {
-        const weekday = document.getElementById('bRecurrenceWeekday').value;
-        if (weekday) {
-          recurring = { frequency: 'weekly', weekday: parseInt(weekday, 10) };
+
+        const res = await fetch('/api/bookings', setAuthHeaders({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }));
+
+        if (res.ok) {
+          await loadBookings();
+          // optional: clear inputs
+          // document.getElementById('bName').value = '';
+          // document.getElementById('bEmail').value = '';
+          // document.getElementById('bStart').value = '';
+          // document.getElementById('bEnd').value = '';
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Booking failed' }));
+          alert(err.error || 'Booking failed');
         }
-      }
-      body.recurring = recurring;
-      const res = await fetch('/api/bookings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (res.ok) {
-        await loadBookings();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Booking failed' }));
-        alert(err.error || 'Booking failed');
+      } catch (e) {
+        console.error(e);
+        alert('Booking failed');
       }
     }
 
@@ -443,13 +634,41 @@
       tbody.innerHTML = '';
       admins.forEach(a => {
         const tr = document.createElement('tr');
-        // Show username and role (defaulting to 'admin' if missing)
         const role = a.role || 'admin';
         tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
         tbody.appendChild(tr);
       });
     }
 
+
+    // Create a new admin user
+    async function addAdmin() {
+      try {
+        const username = document.getElementById('aUser').value.trim();
+        const password = document.getElementById('aPass').value;
+        const role = document.getElementById('aRole').value || 'admin';
+        if (!username || !password) {
+          alert('Please enter a username and password for the new admin.');
+          return;
+        }
+        const res = await fetch('/api/admins', setAuthHeaders({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password, role })
+        }));
+        if (res.ok) {
+          document.getElementById('aUser').value = '';
+          document.getElementById('aPass').value = '';
+          await loadAdmins();
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Failed to create admin' }));
+          alert(err.error || 'Failed to create admin');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Failed to create admin');
+      }
+    }
     // Load kiosk tokens from the server and render into the table
     async function loadKioskTokens() {
       const tableBody = document.querySelector('#kioskTokensTable tbody');
@@ -478,7 +697,6 @@
         return;
       }
       const data = await res.json();
-      // Show the token code to the admin so it can be provisioned on a kiosk device
       const display = document.getElementById('newKioskToken');
       display.textContent = `Token code: ${data.code}`;
       await loadKioskTokens();
@@ -525,7 +743,6 @@
       const tbody = document.createElement('tbody');
       data.forEach(row => {
         const tr = document.createElement('tr');
-        // Convert dayOfWeekCounts object into a human‑readable string like "Mon: 4, Tue: 2"
         let daysStr = '';
         if (row.dayOfWeekCounts) {
           const parts = [];
@@ -562,7 +779,6 @@
         container.textContent = 'No summary available.';
         return;
       }
-      // Build a table with monthly metrics and utilisation
       const { monthlyBookings, monthlyCheckInHours, monthlyNoShowHours, utilisation } = data;
       const keys = Array.from(new Set([
         ...Object.keys(monthlyBookings || {}),
@@ -588,7 +804,6 @@
       });
       table.appendChild(tbody);
       container.appendChild(table);
-      // Display utilisation below the table
       const utilDiv = document.createElement('div');
       utilDiv.style.marginTop = '8px';
       utilDiv.textContent = `Utilisation: ${utilisation}%`;
@@ -619,24 +834,6 @@
       document.body.removeChild(link);
     }
 
-    async function addAdmin() {
-      const username = document.getElementById('aUser').value.trim();
-      const password = document.getElementById('aPass').value.trim();
-      const role = document.getElementById('aRole') ? document.getElementById('aRole').value : 'admin';
-      const body = { username, password, role };
-      const res = await fetch('/api/admins', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
-      if (res.ok) {
-        // Clear inputs and reload list
-        document.getElementById('aUser').value = '';
-        document.getElementById('aPass').value = '';
-        if (document.getElementById('aRole')) document.getElementById('aRole').value = 'admin';
-        await loadAdmins();
-      } else {
-        const err = await res.json().catch(() => ({ error: 'Failed to add admin' }));
-        alert(err.error || 'Failed to add admin');
-      }
-    }
-
     // Show/hide recurrence inputs depending on selected type
     function updateRecurrenceFields() {
       const type = document.getElementById('bRecurrenceType').value;
@@ -652,7 +849,6 @@
         nthSelect.classList.remove('hidden');
         weekdaySelect.classList.remove('hidden');
       } else if (type === 'weekly') {
-        // Weekly recurrence: show weekday only
         dayInput.classList.add('hidden');
         nthSelect.classList.add('hidden');
         weekdaySelect.classList.remove('hidden');
@@ -663,68 +859,162 @@
       }
     }
 
+    // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
+      updateSettingsLinkIfNeeded();
+      ensureSuperAdminIfNeeded();
+      // Safe bindings
+      (function(){
+        function on(id, event, handler){
+          const el = document.getElementById(id);
+          if (el && el.addEventListener) el.addEventListener(event, handler);
+        }
+        on('loginBtn','click', login);
+        on('logoutBtn','click', logout);
+        on('addSpaceBtn','click', addSpace);
+        on('addAdminBtn','click', addAdmin);
+        on('generateKioskBtn','click', generateKioskToken);
+        on('addBookingBtn','click', addBooking);
+        on('loadAnalyticsBtn','click', loadAnalytics);
+        on('loadSummaryBtn','click', loadSummary);
+        on('downloadCsvBtn','click', downloadCsv);
+      })();
+
+      updateSettingsLinkIfNeeded();
+      ensureSuperAdminIfNeeded();
+      on('loginBtn','click', login);
+      on('logoutBtn','click', logout);
+      on('addSpaceBtn','click', addSpace);
+      on('addAdminBtn','click', addAdmin);
+      on('generateKioskBtn','click', generateKioskToken);
+      on('addBookingBtn','click', addBooking);
+      on('loadAnalyticsBtn','click', loadAnalytics);
+      on('loadSummaryBtn','click', loadSummary);
+      on('downloadCsvBtn','click', downloadCsv);
+
+      // Global error banner
+      window.addEventListener('error', (e) => {
+        const div = document.getElementById('loginStatus');
+        if (div && !div.textContent) {
+          div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
+        }
+      });
+
+      // Pagination
+      const prevBtn = document.getElementById('prevPageBtn');
+      const nextBtn = document.getElementById('nextPageBtn');
+      if (prevBtn && nextBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          ps.offset = Math.max(0, ps.offset - ps.limit);
+          loadBookings();
+        });
+        nextBtn.addEventListener('click', () => {
+          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          const ps = window._pageState;
+          if (ps.offset + ps.limit < ps.total) {
+            ps.offset = ps.offset + ps.limit;
+            loadBookings();
+          }
+        });
+      }
+
+      // Auto-show app if token already present
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
+          updateSettingsLinkIfNeeded();
+          ensureSuperAdminIfNeeded();
         refreshAll();
       }
-      document.getElementById('loginBtn').addEventListener('click', login);
-      document.getElementById('logoutBtn').addEventListener('click', () => {
-        localStorage.removeItem('adminToken');
-        token = '';
-        // Redirect to the booking page after logout instead of reloading
-        location.href = 'index.html';
-      });
-      document.getElementById('addSpaceBtn').addEventListener('click', addSpace);
-      document.getElementById('spacesTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delSpace')) {
-          deleteSpace(e.target.dataset.id);
-        }
-      });
-      document.getElementById('addBookingBtn').addEventListener('click', addBooking);
-      document.getElementById('bookingsTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delBooking')) {
-          deleteBooking(e.target.dataset.id);
-        }
-      });
-      document.getElementById('addAdminBtn').addEventListener('click', addAdmin);
-      document.getElementById('adminsTable').addEventListener('click', (e) => {
-        if (e.target.classList.contains('delAdmin')) {
-          const id = e.target.dataset.id;
-          fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
-        }
-      });
-      document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
-      updateRecurrenceFields();
 
-      // Initialise time pickers for start and end times
-      createTimePicker('bStart');
-      createTimePicker('bEnd');
+      // Event bindings
+      // Always bind login button when present
+      {
+        const el = document.getElementById('loginBtn');
+        if (el) el.addEventListener('click', login);
+      }
+      // Logout button
+      {
+        const el = document.getElementById('logoutBtn');
+        if (el) el.addEventListener('click', logout);
+      }
+      // Add space button
+      {
+        const el = document.getElementById('addSpaceBtn');
+        if (el) el.addEventListener('click', addSpace);
+      }
+      // Space table deletion
+      {
+        const el = document.getElementById('spacesTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delSpace')) deleteSpace(e.target.dataset.id);
+          });
+        }
+      }
+      // Add booking button
+      {
+        const el = document.getElementById('addBookingBtn');
+        if (el) el.addEventListener('click', addBooking);
+      }
+      // Bookings table deletion
+      {
+        const el = document.getElementById('bookingsTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id);
+          });
+        }
+      }
+      // Add admin button
+      {
+        const el = document.getElementById('addAdminBtn');
+        if (el) el.addEventListener('click', addAdmin);
+      }
+      // Admins table deletion
+      {
+        const el = document.getElementById('adminsTable');
+        if (el) {
+          el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delAdmin')) {
+              const id = e.target.dataset.id;
+              fetch('/api/admins/' + id, setAuthHeaders({ method: 'DELETE' })).then(() => loadAdmins());
+            }
+          });
+        }
+      }
+      // Recurrence selector
+      {
+        const el = document.getElementById('bRecurrenceType');
+        if (el) {
+          el.addEventListener('change', updateRecurrenceFields);
+          updateRecurrenceFields();
+        }
+      }
+      // Initialise time pickers for start and end times only when inputs exist
+      if (document.getElementById('bStart')) createTimePicker('bStart');
+      if (document.getElementById('bEnd')) createTimePicker('bEnd');
 
-      // Bind analytics loader
+      // Use the native HTML date input for the booking date.  The
+      // custom date picker (createDatePicker) is no longer required, so
+      // this call is commented out.
+      // if (document.getElementById('bDate')) createDatePicker('bDate');
+
+      // Bind analytics & exports
       const analyticsBtn = document.getElementById('loadAnalyticsBtn');
-      if (analyticsBtn) {
-        analyticsBtn.addEventListener('click', loadAnalytics);
-      }
-
-      // Bind summary loader
+      if (analyticsBtn) analyticsBtn.addEventListener('click', loadAnalytics);
       const summaryBtn = document.getElementById('loadSummaryBtn');
-      if (summaryBtn) {
-        summaryBtn.addEventListener('click', loadSummary);
-      }
-
-      // Bind CSV downloader
+      if (summaryBtn) summaryBtn.addEventListener('click', loadSummary);
       const csvBtn = document.getElementById('downloadCsvBtn');
-      if (csvBtn) {
-        csvBtn.addEventListener('click', downloadCsv);
-      }
+      if (csvBtn) csvBtn.addEventListener('click', downloadCsv);
 
-      // Bind kiosk management actions
+          // Kiosk actions
       const genBtn = document.getElementById('generateKioskBtn');
-      if (genBtn) {
-        genBtn.addEventListener('click', generateKioskToken);
-      }
+      if (genBtn) genBtn.addEventListener('click', generateKioskToken);
       const kioskTable = document.getElementById('kioskTokensTable');
       if (kioskTable) {
         kioskTable.addEventListener('click', (e) => {
@@ -735,6 +1025,14 @@
         });
       }
 
+          // Ensure the space dropdown is populated even if the user was already
+          // logged in (e.g. after a page refresh).  Calling loadSpaces() here
+          // guarantees the <select id="bSpace"> options are filled without
+          // waiting for the login flow to run refreshAll().  The function
+          // silently fails if it does not exist.
+          try { if (typeof loadSpaces === 'function') { loadSpaces(); } } catch(e) {
+            console.error('loadSpaces init error', e);
+          }
     });
   </script>
 </body>
