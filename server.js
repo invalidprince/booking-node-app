@@ -190,10 +190,20 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     host: process.env.SMTP_HOST,
     port: port,
     secure: secure,
+    requireTLS: (enc === 'starttls'),
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
+    },
+    tls: {
+      minVersion: 'TLSv1.2'
     }
+  });
+  // Proactively verify the transport so startup clearly fails if misconfigured
+  mailTransporter.verify().then(() => {
+    console.log('SMTP transport ready (', process.env.SMTP_HOST, ':', port, secure ? 'TLS' : 'STARTTLS', ')');
+  }).catch(err => {
+    console.error('SMTP transport verification failed:', err);
   });
 }
 
@@ -652,53 +662,46 @@ async function sendEmail(to, subject, text, attachments = []) {
   // Determine the configured From address.  We support both MAIL_FROM and
   // SMTP_FROM for backwards compatibility.  The first defined value wins.
   const fromAddr = process.env.MAIL_FROM || process.env.SMTP_FROM;
-  if (mailTransporter && fromAddr) {
-    const mailOptions = {
-      from: fromAddr,
-      to,
-      subject,
-      text,
-      // Only include attachments when provided
-      attachments: attachments && attachments.length ? attachments : undefined
-    };
-    try {
-      // Attempt to send the email with attachments (if any)
-      await mailTransporter.sendMail(mailOptions);
-    } catch (err) {
-      console.error('Email send error:', err);
-      // Fallback: retry without attachments if attachments were present
-      if (attachments && attachments.length) {
-        try {
-          const fallbackOptions = {
-            from: fromAddr,
-            to,
-            subject,
-            text
-          };
-          await mailTransporter.sendMail(fallbackOptions);
-        } catch (err2) {
-          console.error('Fallback email send error:', err2);
-          throw err2;
-        }
-      } else {
-        throw err;
-      }
-    }
-  } else {
-    // No SMTP configured; log to console instead.  Include attachment
-    // information so that developers are aware of the additional content.
-    console.log('\n--- EMAIL NOTIFICATION ---');
-    console.log(`To: ${to}`);
-    console.log(`Subject: ${subject}`);
-    console.log(text);
-    if (attachments && attachments.length) {
-      attachments.forEach(att => {
-        const size = att.content ? att.content.length : 0;
-        console.log(`[Attachment: ${att.filename || 'file'} (${size} bytes)]`);
-      });
-    }
-    console.log('--------------------------\n');
+  if (!mailTransporter) {
+    throw new Error('SMTP not configured: transporter is null. Ensure SMTP_HOST/SMTP_USER/SMTP_PASS are set.');
   }
+  if (!fromAddr) {
+    throw new Error('SMTP not configured: MAIL_FROM is not set.');
+  }
+  const mailOptions = {
+    from: fromAddr,
+    to,
+    subject,
+    text,
+    // Only include attachments when provided
+    attachments: attachments && attachments.length ? attachments : undefined
+  };
+  try {
+    // Attempt to send the email with attachments (if any)
+    await mailTransporter.sendMail(mailOptions);
+    console.log('Email sent to', to, 'subject:', subject);
+  } catch (err) {
+    console.error('Email send error:', err);
+    // Fallback: retry without attachments if attachments were present
+    if (attachments && attachments.length) {
+      try {
+        const fallbackOptions = {
+          from: fromAddr,
+          to,
+          subject,
+          text
+        };
+        await mailTransporter.sendMail(fallbackOptions);
+        console.log('Email sent (fallback without attachments) to', to, 'subject:', subject);
+      } catch (err2) {
+        console.error('Fallback email send error:', err2);
+        throw err2;
+      }
+    } else {
+      throw err;
+    }
+  }
+
 }
 
 /**
