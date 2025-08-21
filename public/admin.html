@@ -16,6 +16,8 @@
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .recurrence-controls select, .recurrence-controls input { min-width: 80px; }
     .recurrence-controls label { margin-left: 4px; }
+    /* Timepicker dropdown styling (copied from main booking page) */
+    .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
   </style>
 </head>
 <body>
@@ -63,8 +65,8 @@
         <input id="bName" placeholder="Name">
         <input id="bEmail" placeholder="Email">
         <input id="bDate" type="date">
-        <input id="bStart" placeholder="Start (HH:MM)">
-        <input id="bEnd" placeholder="End (HH:MM)">
+        <input id="bStart" placeholder="Start Time" readonly>
+        <input id="bEnd" placeholder="End Time" readonly>
         <select id="bSpace"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
@@ -109,11 +111,51 @@
       <div class="row">
         <input id="aUser" placeholder="username (email)">
         <input id="aPass" placeholder="password">
+        <!-- Role selection for new admin users -->
+        <select id="aRole">
+          <option value="admin" selected>Admin</option>
+          <option value="analyst">Analyst</option>
+          <option value="frontdesk">FrontDesk</option>
+        </select>
         <button id="addAdminBtn">Add Admin</button>
       </div>
       <table id="adminsTable">
         <thead>
-          <tr><th>Username</th><th>Action</th></tr>
+          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Analytics section -->
+    <div class="card">
+      <h2>Analytics</h2>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+        <label for="analyticsPeriod">Period:</label>
+        <select id="analyticsPeriod">
+          <option value="month">This Month</option>
+          <option value="quarter">This Quarter</option>
+          <option value="year">This Year</option>
+          <option value="ytd">Year‑to‑date</option>
+        </select>
+        <button id="loadAnalyticsBtn">Load Analytics</button>
+        <button id="loadSummaryBtn">Load Summary</button>
+        <button id="downloadCsvBtn">Download CSV</button>
+      </div>
+      <div id="analyticsResults" style="margin-top:12px;"></div>
+      <div id="summaryResults" style="margin-top:12px;"></div>
+    </div>
+
+    <!-- Kiosk management section -->
+    <div class="card">
+      <h2>Kiosk Devices</h2>
+      <div class="row">
+        <button id="generateKioskBtn">Generate Token</button>
+      </div>
+      <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
+      <table id="kioskTokensTable">
+        <thead>
+          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -155,6 +197,141 @@
       await loadSpaces();
       await loadBookings();
       await loadAdmins();
+      await loadKioskTokens();
+    }
+
+    // Convert 12h time string (e.g. "3:30 PM") to 24h format (HH:MM)
+    function convertTo24h(str) {
+      if (!str) return '';
+      const parts = str.trim().split(' ');
+      if (parts.length < 2) return str;
+      const time = parts[0], period = parts[1];
+      let [hour, minute] = time.split(':');
+      hour = parseInt(hour, 10);
+      if (period === 'PM' && hour !== 12) hour += 12;
+      if (period === 'AM' && hour === 12) hour = 0;
+      return `${hour.toString().padStart(2, '0')}:${minute}`;
+    }
+
+    // Create a custom time picker similar to the main booking page
+    function createTimePicker(inputId) {
+      const input = document.getElementById(inputId);
+      const container = document.createElement('div');
+      container.className = 'timepicker-dropdown';
+      container.style.position = 'absolute';
+      container.style.display = 'none';
+      container.style.background = '#fff';
+      container.style.border = '1px solid #ccc';
+      container.style.padding = '6px';
+      container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+      container.style.zIndex = 1000;
+      const hourSelect = document.createElement('select');
+      for (let i = 1; i <= 12; i++) {
+        const opt = document.createElement('option');
+        opt.value = i < 10 ? '0' + i : '' + i;
+        opt.textContent = opt.value;
+        hourSelect.appendChild(opt);
+      }
+      const minuteSelect = document.createElement('select');
+      ['00', '15', '30', '45'].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        minuteSelect.appendChild(opt);
+      });
+      const periodSelect = document.createElement('select');
+      ['AM', 'PM'].forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        periodSelect.appendChild(opt);
+      });
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const value = `${hourSelect.value}:${minuteSelect.value} ${periodSelect.value}`;
+        input.value = value;
+        container.style.display = 'none';
+      };
+      container.appendChild(hourSelect);
+      container.appendChild(minuteSelect);
+      container.appendChild(periodSelect);
+      container.appendChild(setBtn);
+      document.body.appendChild(container);
+      input.addEventListener('focus', () => {
+        const rect = input.getBoundingClientRect();
+        container.style.left = `${rect.left + window.scrollX}px`;
+        container.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        container.style.display = 'block';
+      });
+      document.addEventListener('click', (e) => {
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
+      });
+    }
+
+    // Convert 24h time to 12h with AM/PM for display
+    function to12Hour(time) {
+      if (typeof time !== 'string' || !time.includes(':')) return time;
+      const [hStr, m] = time.split(':');
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return time;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      if (h === 0) h = 12;
+      return `${h}:${m} ${ampm}`;
+    }
+
+    // Format recurrence object into a human friendly string
+    function formatRecurrence(rec) {
+      if (!rec) return '';
+      if (rec.frequency === 'weekly' && rec.weekday !== undefined) {
+        return `Weekly – ${weekdayName(rec.weekday)}`;
+      }
+      if (rec.frequency === 'monthly') {
+        if (rec.dayOfMonth !== undefined) {
+          return `Monthly – ${ordinal(rec.dayOfMonth)}`;
+        }
+        if (rec.nth !== undefined && rec.weekday !== undefined) {
+          return `Monthly – ${ordinalNth(rec.nth)} ${weekdayName(rec.weekday)}`;
+        }
+      }
+      return '';
+    }
+
+    function weekdayName(index) {
+      const names = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const i = Number(index);
+      return names[i] || '';
+    }
+
+    function ordinal(n) {
+      const i = parseInt(n, 10);
+      if (isNaN(i)) return n;
+      const s = ['th','st','nd','rd'];
+      const v = i % 100;
+      return i + (s[(v - 20) % 10] || s[v] || s[0]);
+    }
+
+    function ordinalNth(n) {
+      const i = parseInt(n, 10);
+      const ord = ordinal(i);
+      // Remove the numeric part, leave only the ordinal indicator
+      return ord;
+    }
+
+    // Format date as "Weekday, MM/DD/YYYY"
+    function formatDateWithDay(dateStr) {
+      if (!dateStr) return dateStr;
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = weekdayName(d.getDay());
+      const mm = String(d.getMonth() + 1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const yyyy = d.getFullYear();
+      return `${day}, ${mm}/${dd}/${yyyy}`;
     }
 
     async function loadSpaces() {
@@ -202,19 +379,26 @@
       tbody.innerHTML = '';
       bookings.forEach(b => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${b.date}</td><td>${b.startTime}</td><td>${b.endTime}</td><td>${b.recurring ? 'Yes' : 'No'}</td>
+        const start12 = to12Hour(b.startTime);
+        const end12 = to12Hour(b.endTime);
+        const dateFormatted = formatDateWithDay(b.date);
+        const recurrenceDesc = formatRecurrence(b.recurrence);
+        tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td><td>${dateFormatted}</td><td>${start12}</td><td>${end12}</td><td>${recurrenceDesc || (b.recurring ? 'Recurring' : '')}</td>
           <td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
         tbody.appendChild(tr);
       });
     }
 
     async function addBooking() {
+      const rawStart = document.getElementById('bStart').value;
+      const rawEnd = document.getElementById('bEnd').value;
       const body = {
         name: document.getElementById('bName').value.trim(),
         email: document.getElementById('bEmail').value.trim(),
         date: document.getElementById('bDate').value,
-        startTime: document.getElementById('bStart').value,
-        endTime: document.getElementById('bEnd').value,
+        // Convert 12h input values to 24h for API submission
+        startTime: convertTo24h(rawStart),
+        endTime: convertTo24h(rawEnd),
         spaceId: document.getElementById('bSpace').value
       };
       // Determine recurrence object
@@ -259,19 +443,197 @@
       tbody.innerHTML = '';
       admins.forEach(a => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${a.username}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
+        // Show username and role (defaulting to 'admin' if missing)
+        const role = a.role || 'admin';
+        tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
         tbody.appendChild(tr);
       });
     }
 
+    // Load kiosk tokens from the server and render into the table
+    async function loadKioskTokens() {
+      const tableBody = document.querySelector('#kioskTokensTable tbody');
+      if (!tableBody) return;
+      try {
+        const res = await fetch('/api/kiosk/tokens', setAuthHeaders());
+        if (!res.ok) throw new Error('Failed to load kiosk tokens');
+        const tokens = await res.json();
+        tableBody.innerHTML = '';
+        tokens.forEach(t => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td><td><button data-id="${t.id}" class="delKiosk">Revoke</button></td>`;
+          tableBody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    // Request a new kiosk token from the server and display the result
+    async function generateKioskToken() {
+      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST' }));
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to generate token' }));
+        alert(err.error || 'Failed to generate token');
+        return;
+      }
+      const data = await res.json();
+      // Show the token code to the admin so it can be provisioned on a kiosk device
+      const display = document.getElementById('newKioskToken');
+      display.textContent = `Token code: ${data.code}`;
+      await loadKioskTokens();
+    }
+
+    // Revoke a kiosk token by ID
+    async function revokeKioskToken(id) {
+      const res = await fetch('/api/kiosk/tokens/' + id, setAuthHeaders({ method: 'DELETE' }));
+      if (res.ok) {
+        await loadKioskTokens();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed to revoke token' }));
+        alert(err.error || 'Failed to revoke token');
+      }
+    }
+
+    // Load analytics data and render a table
+    async function loadAnalytics() {
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) {
+        url += '?' + params.toString();
+      }
+      const res = await fetch(url, setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to load analytics' }));
+        alert(err.error || 'Failed to load analytics');
+        return;
+      }
+      const data = await res.json();
+      const container = document.getElementById('analyticsResults');
+      container.innerHTML = '';
+      if (!data || data.length === 0) {
+        container.textContent = 'No booking analytics available.';
+        return;
+      }
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Email</th><th>Bookings by Day</th><th>#Bookings</th><th>Check‑in Hours</th><th>No‑show Hours</th><th>Check‑ins</th><th>No Check‑ins</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      data.forEach(row => {
+        const tr = document.createElement('tr');
+        // Convert dayOfWeekCounts object into a human‑readable string like "Mon: 4, Tue: 2"
+        let daysStr = '';
+        if (row.dayOfWeekCounts) {
+          const parts = [];
+          for (const [day, count] of Object.entries(row.dayOfWeekCounts)) {
+            if (count > 0) parts.push(`${day.slice(0,3)}: ${count}`);
+          }
+          daysStr = parts.join(', ');
+        }
+        tr.innerHTML = `<td>${row.email}</td><td>${daysStr}</td><td>${row.bookingsCount}</td><td>${row.totalCheckInHours}</td><td>${row.totalNoShowHours}</td><td>${row.checkIns}</td><td>${row.noCheckIns}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    // Load summary analytics (aggregated across all users) and render a simple view
+    async function loadSummary() {
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics-summary';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) url += '?' + params.toString();
+      const res = await fetch(url, setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to load summary' }));
+        alert(err.error || 'Failed to load summary');
+        return;
+      }
+      const data = await res.json();
+      const container = document.getElementById('summaryResults');
+      container.innerHTML = '';
+      if (!data) {
+        container.textContent = 'No summary available.';
+        return;
+      }
+      // Build a table with monthly metrics and utilisation
+      const { monthlyBookings, monthlyCheckInHours, monthlyNoShowHours, utilisation } = data;
+      const keys = Array.from(new Set([
+        ...Object.keys(monthlyBookings || {}),
+        ...Object.keys(monthlyCheckInHours || {}),
+        ...Object.keys(monthlyNoShowHours || {})
+      ])).sort();
+      if (keys.length === 0) {
+        container.textContent = 'No summary available.';
+        return;
+      }
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Month</th><th>#Bookings</th><th>Check‑in Hours</th><th>No‑show Hours</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      keys.forEach(k => {
+        const tr = document.createElement('tr');
+        const bookings = monthlyBookings && monthlyBookings[k] ? monthlyBookings[k] : 0;
+        const checkIn = monthlyCheckInHours && monthlyCheckInHours[k] ? monthlyCheckInHours[k] : '0.00';
+        const noShow = monthlyNoShowHours && monthlyNoShowHours[k] ? monthlyNoShowHours[k] : '0.00';
+        tr.innerHTML = `<td>${k}</td><td>${bookings}</td><td>${checkIn}</td><td>${noShow}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      container.appendChild(table);
+      // Display utilisation below the table
+      const utilDiv = document.createElement('div');
+      utilDiv.style.marginTop = '8px';
+      utilDiv.textContent = `Utilisation: ${utilisation}%`;
+      container.appendChild(utilDiv);
+    }
+
+    // Download the analytics CSV file for the selected period
+    async function downloadCsv() {
+      const periodSel = document.getElementById('analyticsPeriod');
+      const period = periodSel ? periodSel.value : 'month';
+      let url = '/api/analytics-export';
+      const params = new URLSearchParams();
+      if (period) params.set('period', period);
+      if (params.toString()) url += '?' + params.toString();
+      const res = await fetch(url, setAuthHeaders());
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to download CSV' }));
+        alert(err.error || 'Failed to download CSV');
+        return;
+      }
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'analytics.csv';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
     async function addAdmin() {
-      const body = {
-        username: document.getElementById('aUser').value.trim(),
-        password: document.getElementById('aPass').value.trim()
-      };
+      const username = document.getElementById('aUser').value.trim();
+      const password = document.getElementById('aPass').value.trim();
+      const role = document.getElementById('aRole') ? document.getElementById('aRole').value : 'admin';
+      const body = { username, password, role };
       const res = await fetch('/api/admins', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
       if (res.ok) {
+        // Clear inputs and reload list
+        document.getElementById('aUser').value = '';
+        document.getElementById('aPass').value = '';
+        if (document.getElementById('aRole')) document.getElementById('aRole').value = 'admin';
         await loadAdmins();
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Failed to add admin' }));
+        alert(err.error || 'Failed to add admin');
       }
     }
 
@@ -335,6 +697,44 @@
       });
       document.getElementById('bRecurrenceType').addEventListener('change', updateRecurrenceFields);
       updateRecurrenceFields();
+
+      // Initialise time pickers for start and end times
+      createTimePicker('bStart');
+      createTimePicker('bEnd');
+
+      // Bind analytics loader
+      const analyticsBtn = document.getElementById('loadAnalyticsBtn');
+      if (analyticsBtn) {
+        analyticsBtn.addEventListener('click', loadAnalytics);
+      }
+
+      // Bind summary loader
+      const summaryBtn = document.getElementById('loadSummaryBtn');
+      if (summaryBtn) {
+        summaryBtn.addEventListener('click', loadSummary);
+      }
+
+      // Bind CSV downloader
+      const csvBtn = document.getElementById('downloadCsvBtn');
+      if (csvBtn) {
+        csvBtn.addEventListener('click', downloadCsv);
+      }
+
+      // Bind kiosk management actions
+      const genBtn = document.getElementById('generateKioskBtn');
+      if (genBtn) {
+        genBtn.addEventListener('click', generateKioskToken);
+      }
+      const kioskTable = document.getElementById('kioskTokensTable');
+      if (kioskTable) {
+        kioskTable.addEventListener('click', (e) => {
+          if (e.target.classList.contains('delKiosk')) {
+            const id = e.target.dataset.id;
+            revokeKioskToken(id);
+          }
+        });
+      }
+
     });
   </script>
 </body>

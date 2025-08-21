@@ -60,6 +60,17 @@
     <div class="status" id="status"></div>
   </div>
 
+  <!-- Email verification overlay (hidden by default) -->
+  <div id="verificationOverlay" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; z-index:1000;">
+    <div class="card" style="max-width:400px; text-align:center;">
+      <h2>Email Verification Required</h2>
+      <p>Please enter your @fbhi.net email to verify before booking.</p>
+      <input type="email" id="verifyEmail" placeholder="you@fbhi.net" style="width:100%; margin-bottom:8px;">
+      <button id="verifyBtn" type="button">Send Verification Link</button>
+      <div id="verifyStatus" style="margin-top:8px; color:#333;"></div>
+    </div>
+  </div>
+
   <!-- Availability section -->
   <div class="card" id="availability-section">
     <h2>Check Space Availability</h2>
@@ -190,9 +201,17 @@
         statusEl.textContent = 'Please fill in all fields.';
         return;
       }
+      // Validate email domain on client side (trim and normalise)
+      const emailNormalized = email.toLowerCase().trim();
+      if (!emailNormalized.endsWith('@fbhi.net')) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Email must be a @fbhi.net address.';
+        return;
+      }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
       try {
+        // Client‑side verification is not enforced here; overlay ensures the first visit verification.
         if (spaceVal.startsWith('auto-')) {
           const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
           const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
@@ -238,7 +257,69 @@
       // Availability initialization
       populateAvailSpaces();
       document.getElementById('checkBtn').addEventListener('click', checkAvailability);
+
+      // Show verification overlay on first visit if email not verified
+      checkVerificationStatus();
+      document.getElementById('verifyBtn').addEventListener('click', requestVerification);
+
+      // If a verified email is stored, prefill the email field and prevent editing
+      try {
+        const verifiedFlag = localStorage.getItem('emailVerified');
+        const verifiedEmail = localStorage.getItem('verifiedEmail');
+        const emailInput = document.getElementById('email');
+        if (verifiedFlag === 'true' && verifiedEmail) {
+          emailInput.value = verifiedEmail;
+          emailInput.readOnly = true;
+          emailInput.style.background = '#f0f0f0';
+        }
+      } catch (e) {}
     });
+
+    // Show or hide verification overlay depending on localStorage flag
+    function checkVerificationStatus() {
+      try {
+        const verified = localStorage.getItem('emailVerified');
+        if (verified === 'true') {
+          document.getElementById('verificationOverlay').style.display = 'none';
+        } else {
+          document.getElementById('verificationOverlay').style.display = 'flex';
+        }
+      } catch (e) {
+        document.getElementById('verificationOverlay').style.display = 'flex';
+      }
+    }
+
+    // Send a verification email request
+    async function requestVerification() {
+      const emailInput = document.getElementById('verifyEmail');
+      const statusEl = document.getElementById('verifyStatus');
+      const email = emailInput.value.trim().toLowerCase();
+      statusEl.style.color = '#333';
+      statusEl.textContent = '';
+      if (!email || !email.endsWith('@fbhi.net')) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Please enter a valid @fbhi.net email address.';
+        return;
+      }
+      try {
+        const res = await fetch('/api/request-verification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+        if (res.ok) {
+          statusEl.style.color = 'green';
+          statusEl.textContent = 'A verification email has been sent. Please check your inbox.';
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Failed to send verification' }));
+          statusEl.style.color = 'red';
+          statusEl.textContent = err.error || 'Failed to send verification.';
+        }
+      } catch (err) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'An error occurred while sending the verification email.';
+      }
+    }
 
     // Populate spaces for availability check (without auto options)
     async function populateAvailSpaces() {
@@ -269,6 +350,18 @@
         slots.push({ start: `${h1}:30`, end: `${h2}:00` });
       }
       return slots;
+    }
+
+    // Convert 24h time to 12h AM/PM for display
+    function to12Hour(time) {
+      if (typeof time !== 'string' || !time.includes(':')) return time;
+      const [hStr, m] = time.split(':');
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return time;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      if (h === 0) h = 12;
+      return `${h}:${m} ${ampm}`;
     }
 
     // Check space availability and render results
@@ -313,7 +406,7 @@
       const tbody = document.createElement('tbody');
       results.forEach(r => {
         const tr = document.createElement('tr');
-        const timeLabel = `${r.start} - ${r.end}`;
+        const timeLabel = `${to12Hour(r.start)} - ${to12Hour(r.end)}`;
         tr.innerHTML = `<td>${timeLabel}</td><td class="${r.available ? 'yes' : 'no'}">${r.available ? 'Yes' : 'No'}</td>`;
         tbody.appendChild(tr);
       });
