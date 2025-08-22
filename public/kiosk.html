@@ -279,6 +279,19 @@
       }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
+
+      // Client‑side check: prevent booking a date/time in the past relative to Eastern time zone.
+      try {
+        const selectedStart = new Date(`${date}T${startTime}:00`);
+        const easternNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        if (selectedStart < easternNow) {
+          statusEl.style.color = 'red';
+          statusEl.textContent = 'Cannot book a date/time in the past.';
+          return;
+        }
+      } catch (err) {
+        // ignore parse errors
+      }
       try {
         if (spaceVal.startsWith('auto-')) {
           const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
