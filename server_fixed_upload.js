@@ -1113,6 +1113,42 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
   }
 });
 
+// Allow admins to request a password reset. The client sends the username
+// (email) in the request body; the server generates a new random
+// password, hashes it using the existing salt/hash mechanism, updates
+// the admin's stored credentials, persists the change, and emails the
+// new password to the admin. The response does not include the
+// password.
+app.post('/api/admins/lost-password', async (req, res) => {
+  try {
+    const { username } = req.body || {};
+    if (!username) {
+      return res.status(400).json({ ok: false, error: 'Missing username' });
+    }
+    const admin = admins.find(a => a.username === username);
+    if (!admin) {
+      return res.status(404).json({ ok: false, error: 'Admin not found' });
+    }
+    // Generate a new random password (8 hex characters)
+    const newPassword = crypto.randomBytes(4).toString('hex');
+    const { salt, hash } = hashPassword(newPassword);
+    admin.salt = salt;
+    admin.passwordHash = hash;
+    saveData();
+    try {
+      await sendEmail(username, 'Password Reset', `Your new password is: ${newPassword}`);
+    } catch (err) {
+      console.error('Failed to send password reset email', err);
+      // Even if email fails, we still return ok to avoid revealing
+      // whether an email was sent or not.
+    }
+    return res.json({ ok: true, message: 'A new password has been sent to your email.' });
+  } catch (err) {
+    console.error('lost-password error', err);
+    return res.status(500).json({ ok: false, error: 'internal-error' });
+  }
+});
+
 // ----- Kiosk and analytics routes -----
 
 // Return bookings for the current day (including recurring bookings that occur on the current day).
