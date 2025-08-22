@@ -1930,7 +1930,12 @@ app.get('/api/test-email', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'send-failed', detail: String(e && (e.message || e)) });
   }
 });
-app.listen(PORT, () => {
-    console.log(`Booking app listening at http://localhost:${PORT}`);
+// Explicitly bind to 0.0.0.0 so the server listens on all network interfaces.
+// This is important for cloud providers like Render which expect the
+// application to listen on an external interface.  Without specifying a
+// host, Node uses all interfaces by default, but this explicit binding
+// makes it unambiguous.  The log message now reflects the bound host.
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Booking app listening on port ${PORT}`);
   });
 })();
