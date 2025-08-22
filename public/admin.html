@@ -36,6 +36,8 @@
       <button id="loginBtn" type="button">Login</button>
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
+    <!-- Lost password link: allows admins to request a password reset -->
+    <div style="margin-top:4px;"><a href="#" id="forgotPasswordLink" style="font-size:12px;">Forgot password?</a></div>
   </div>
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
       <h2>Bookings</h2>
@@ -241,6 +243,44 @@
         status.textContent = 'Login error. See console for details.';
       } finally {
         btn.disabled = false;
+      }
+    }
+
+    // Allow admins to request a password reset. When clicked, this
+    // function sends the entered username to the server and displays
+    // a status message. The server will generate a new password and
+    // email it to the admin. If no username is entered, an informative
+    // error message is shown.
+    async function lostPassword(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const status = document.getElementById('loginStatus');
+      // reset status styling
+      status.style.color = '#b00';
+      status.textContent = '';
+      const username = document.getElementById('username').value.trim();
+      if (!username) {
+        status.textContent = 'Enter your username to reset password.';
+        return;
+      }
+      try {
+        const res = await fetch('/api/admins/lost-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        let data = {};
+        try { data = await res.clone().json(); } catch (_) {}
+        if (res.ok && data && data.ok) {
+          status.style.color = 'green';
+          status.textContent = data.message || 'A new password has been sent.';
+        } else {
+          status.style.color = '#b00';
+          status.textContent = (data && data.error) || 'Password reset failed.';
+        }
+      } catch (e) {
+        console.error('lostPassword error', e);
+        status.style.color = '#b00';
+        status.textContent = 'Password reset failed.';
       }
     }
 
@@ -583,6 +623,15 @@
         const startTime = convertTo24h(startStr);
         const endTime = convertTo24h(endStr);
 
+        // Prevent booking before current date/time. Construct a Date from
+        // the selected booking date and start time and ensure it is not
+        // in the past.
+        const bookingStart = new Date(`${date}T${startTime}:00`);
+        if (bookingStart.getTime() < Date.now()) {
+          alert('Cannot book prior to the current date/time.');
+          return;
+        }
+
         const body = { name, email, date, startTime, endTime, spaceId };
 
         // Recurrence payload
@@ -828,7 +877,8 @@
       const blob = new Blob([text], { type: 'text/csv' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'analytics.csv';
+      // Download the file as bookings.csv to reflect that all bookings are exported
+      link.download = 'bookings.csv';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -878,6 +928,8 @@
         on('loadAnalyticsBtn','click', loadAnalytics);
         on('loadSummaryBtn','click', loadSummary);
         on('downloadCsvBtn','click', downloadCsv);
+        // Bind the lost password link for admins
+        on('forgotPasswordLink','click', lostPassword);
       })();
 
       updateSettingsLinkIfNeeded();
@@ -891,6 +943,12 @@
       on('loadAnalyticsBtn','click', loadAnalytics);
       on('loadSummaryBtn','click', loadSummary);
       on('downloadCsvBtn','click', downloadCsv);
+
+      // Bind the lost password link for admins (non‑safe binding)
+      {
+        const el = document.getElementById('forgotPasswordLink');
+        if (el) el.addEventListener('click', lostPassword);
+      }
 
       // Global error banner
       window.addEventListener('error', (e) => {

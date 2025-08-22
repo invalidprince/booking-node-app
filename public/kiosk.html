@@ -279,6 +279,15 @@
       }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
+
+      // Prevent booking before current date/time. Convert the date and
+      // selected start time into a Date object and compare against now.
+      const bookingStart = new Date(`${date}T${startTime}:00`);
+      if (bookingStart.getTime() < Date.now()) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Cannot book prior to the current date/time.';
+        return;
+      }
       try {
         if (spaceVal.startsWith('auto-')) {
           const type = spaceVal === 'auto-desk' ? 'desk' : 'office';

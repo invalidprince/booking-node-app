@@ -235,6 +235,17 @@
       }
       const startTime = convertTo24h(startRaw);
       const endTime = convertTo24h(endRaw);
+
+      // Prevent booking before current date/time. Parse the selected
+      // date and start time into a Date object (local time) and
+      // compare against the current time. If the booking start is
+      // earlier than now, show an error and abort.
+      const bookingStart = new Date(`${date}T${startTime}:00`);
+      if (bookingStart.getTime() < Date.now()) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Cannot book prior to the current date/time.';
+        return;
+      }
       try {
         // Client‑side verification is not enforced here; overlay ensures the first visit verification.
         if (spaceVal.startsWith('auto-')) {
