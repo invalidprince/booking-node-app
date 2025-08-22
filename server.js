@@ -527,8 +527,21 @@ function hashPassword(password) {
 function verifyPassword(password, admin) {
   if (!admin) return false;
   if (admin.passwordHash && admin.salt) {
-    const hash = crypto.pbkdf2Sync(password, admin.salt, 100000, 64, 'sha512').toString('hex');
-    return hash === admin.passwordHash;
+    // Determine the expected length of the derived key. Older passwords
+    // may have been hashed with a shorter key length (e.g. 16 bytes -> 32 hex
+    // characters). To maintain compatibility, derive a key whose length
+    // matches the stored hash length. If the stored hash length is odd or
+    // less than 2 characters, fall back to 64 bytes (128 hex).
+    let dkLen = 64; // bytes
+    const hexLen = admin.passwordHash.length;
+    if (hexLen >= 2 && hexLen % 2 === 0) {
+      dkLen = Math.floor(hexLen / 2);
+      // Clamp to minimum of 16 bytes and maximum of 64 bytes
+      if (dkLen < 16) dkLen = 16;
+      if (dkLen > 64) dkLen = 64;
+    }
+    const derived = crypto.pbkdf2Sync(password, admin.salt, 100000, dkLen, 'sha512').toString('hex');
+    return derived === admin.passwordHash;
   }
   // Legacy plain text fallback
   return admin.password === password;

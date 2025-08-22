@@ -520,8 +520,16 @@ function hashPassword(password) {
 function verifyPassword(password, admin) {
   if (!admin) return false;
   if (admin.passwordHash && admin.salt) {
-    const hash = crypto.pbkdf2Sync(password, admin.salt, 100000, 64, 'sha512').toString('hex');
-    return hash === admin.passwordHash;
+    // Determine the expected derived key length based on the stored hash.
+    let dkLen = 64;
+    const hexLen = admin.passwordHash.length;
+    if (hexLen >= 2 && hexLen % 2 === 0) {
+      dkLen = Math.floor(hexLen / 2);
+      if (dkLen < 16) dkLen = 16;
+      if (dkLen > 64) dkLen = 64;
+    }
+    const derived = crypto.pbkdf2Sync(password, admin.salt, 100000, dkLen, 'sha512').toString('hex');
+    return derived === admin.passwordHash;
   }
   // Legacy plain text fallback
   return admin.password === password;
