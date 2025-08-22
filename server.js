@@ -382,7 +382,10 @@ const tokens = {};
 // verificationTokens map token strings to email addresses pending
 // verification. verificationTokens are not persisted and are cleared on
 // restart.
-cconst verifiedEmails = [];
+// Verified end-user email addresses list. Persisted across restarts.  These are the only
+// email addresses allowed to make bookings.  Use a regular const declaration (not a typo)
+// so Node.js can correctly parse and initialise this list.
+const verifiedEmails = [];
 
 const verificationTokens = {};
 
