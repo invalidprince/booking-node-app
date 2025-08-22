@@ -875,7 +875,10 @@ app.get('/api/bookings', adminAuth, (req, res) => {
  *     nth occurrence of weekday in the month.
  */
 app.post('/api/bookings', (req, res) => {
-  const { name, email, spaceId, date, startTime, endTime, recurring } = req.body;
+  // Accept both `recurring` (boolean/object) and legacy `recurrence` (object) keys from the request body.
+  // Some front‑end code uses `recurrence` to describe the recurrence pattern.  To maintain
+  // compatibility, destructure both keys and later normalise into a single `rec` variable.
+  const { name, email, spaceId, date, startTime, endTime, recurring, recurrence } = req.body;
   if (!name || !email || !spaceId || !date || !startTime || !endTime) {
     return res.status(400).json({ error: 'Missing fields' });
   }
@@ -921,7 +924,14 @@ app.post('/api/bookings', (req, res) => {
     }
   }
   // Check availability for the first occurrence of a recurring booking or single booking
-  const rec = recurring && typeof recurring === 'object' ? recurring : false;
+  // Normalise recurrence: if `recurring` is provided as an object use it; otherwise fall back
+  // to the `recurrence` property.  If neither contains an object, treat as non‑recurring (false).
+  let rec = false;
+  if (recurring && typeof recurring === 'object') {
+    rec = recurring;
+  } else if (recurrence && typeof recurrence === 'object') {
+    rec = recurrence;
+  }
   // If recurring, the provided date is the first occurrence. We still need
   // to ensure that date/time is free.
   if (!isSpaceAvailable(spaceId, date, startTime, endTime)) {
