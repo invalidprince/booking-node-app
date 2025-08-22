@@ -702,14 +702,44 @@ function adminAuth(req, res, next) {
 
 // ----- API routes -----------------------------------------------------------
 // Admin login endpoint
-app.post('/api/login', (req, res) => {
+// Admin login endpoint.  Supports login against the in‑memory admin list
+// and, when a database connection is available, against the `admins` table.
+app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Missing username or password' });
     }
     const uname = String(username).toLowerCase();
-    const admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
+    // First check the in‑memory admins list
+    let admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
+    // If not found in memory and a database is configured, attempt to load
+    // the admin from the database.  This allows Supabase/Render deployments
+    // to authenticate admins stored in Postgres.
+    if (!admin && db) {
+      try {
+        const result = await db.query(
+          'SELECT id, username, "passwordHash", salt, role FROM admins WHERE lower(username) = $1',
+          [uname]
+        );
+        if (result && result.rows && result.rows.length > 0) {
+          const row = result.rows[0];
+          admin = {
+            id: row.id,
+            username: row.username,
+            passwordHash: row.passwordHash,
+            salt: row.salt,
+            role: row.role || 'admin'
+          };
+          // Cache this admin in memory for subsequent requests
+          const existingIdx = admins.findIndex(a => a.username.toLowerCase() === uname);
+          if (existingIdx >= 0) admins[existingIdx] = admin; else admins.push(admin);
+        }
+      } catch (err) {
+        console.error('DB lookup failed during login', err);
+      }
+    }
+    // If still not found or password invalid, reject
     if (!admin || !verifyPassword(password, admin)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -1125,24 +1155,60 @@ app.post('/api/admins/lost-password', async (req, res) => {
     if (!username) {
       return res.status(400).json({ ok: false, error: 'Missing username' });
     }
-    const admin = admins.find(a => a.username === username);
+    // Look up admin in memory first
+    let admin = admins.find(a => a.username && a.username.toLowerCase() === username.toLowerCase());
+    // If not found and database is available, query the admins table
+    if (!admin && db) {
+      try {
+        const result = await db.query(
+          'SELECT id, username, "passwordHash", salt, role FROM admins WHERE lower(username) = $1',
+          [username.toLowerCase()]
+        );
+        if (result && result.rows && result.rows.length > 0) {
+          const row = result.rows[0];
+          admin = {
+            id: row.id,
+            username: row.username,
+            passwordHash: row.passwordHash,
+            salt: row.salt,
+            role: row.role || 'admin'
+          };
+          // Cache this admin for future operations
+          const existingIdx = admins.findIndex(a => a.username.toLowerCase() === row.username.toLowerCase());
+          if (existingIdx >= 0) admins[existingIdx] = admin; else admins.push(admin);
+        }
+      } catch (err) {
+        console.error('DB lookup failed during password reset', err);
+      }
+    }
     if (!admin) {
-      return res.status(404).json({ ok: false, error: 'Admin not found' });
+      // For security, do not reveal whether the admin exists
+      return res.json({ ok: true, message: 'If the account exists, a reset email has been sent.' });
     }
     // Generate a new random password (8 hex characters)
     const newPassword = crypto.randomBytes(4).toString('hex');
     const { salt, hash } = hashPassword(newPassword);
     admin.salt = salt;
     admin.passwordHash = hash;
+    // Persist changes to file
     saveData();
+    // Persist to DB if available
+    if (db) {
+      try {
+        await db.query(
+          'UPDATE admins SET "passwordHash" = $1, salt = $2 WHERE id = $3',
+          [hash, salt, admin.id]
+        );
+      } catch (err) {
+        console.error('Failed to update admin password in DB', err);
+      }
+    }
     try {
-      await sendEmail(username, 'Password Reset', `Your new password is: ${newPassword}`);
+      await sendEmail(admin.username, 'Password Reset', `Your new password is: ${newPassword}`);
     } catch (err) {
       console.error('Failed to send password reset email', err);
-      // Even if email fails, we still return ok to avoid revealing
-      // whether an email was sent or not.
     }
-    return res.json({ ok: true, message: 'A new password has been sent to your email.' });
+    return res.json({ ok: true, message: 'If the account exists, a reset email has been sent.' });
   } catch (err) {
     console.error('lost-password error', err);
     return res.status(500).json({ ok: false, error: 'internal-error' });
