@@ -292,6 +292,105 @@ async function saveData() {
 }
 
 /**
+ * Load persisted data from either the Postgres database (when configured)
+ * or from the local JSON file. This function will populate the in-memory
+ * collections (spaces, bookings, admins, verifiedEmails and kioskTokens)
+ * with the stored values. When no persisted data exists, the default
+ * values defined above will remain. Any errors encountered while
+ * reading from disk or the database are logged but do not prevent the
+ * server from starting.
+ */
+async function loadData() {
+  // If a database connection is available, load state from the database
+  if (db) {
+    try {
+      // Load spaces from the table and replace the default values
+      const resSpaces = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
+      spaces.splice(0, spaces.length, ...resSpaces.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        priorityOrder: r.priorityOrder
+      })));
+
+      // Load bookings.  Note that the recurring column is stored as JSON
+      // and may be null for non-recurring bookings.  Check-in/out times
+      // and cancelled flags are optional and may be null.
+      const resBookings = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
+      bookings.splice(0, bookings.length, ...resBookings.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        spaceId: r.spaceId,
+        date: r.date,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        recurring: r.recurring || null,
+        checkInTime: r.checkInTime || null,
+        checkOutTime: r.checkOutTime || null,
+        cancelled: r.cancelled || false
+      })));
+
+      // Load admin accounts.  Password hashes and salts are stored in the
+      // database.  The role column may be null for legacy rows, defaulting
+      // to 'admin'.
+      const resAdmins = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
+      admins.splice(0, admins.length, ...resAdmins.rows.map(r => ({
+        id: r.id,
+        username: r.username,
+        passwordHash: r.passwordHash,
+        salt: r.salt,
+        role: r.role || 'admin'
+      })));
+
+      // Load verified email addresses.  Each row in the table represents a
+      // single verified email.
+      const resVerified = await db.query('SELECT email FROM "verifiedEmails"');
+      verifiedEmails.splice(0, verifiedEmails.length, ...resVerified.rows.map(r => r.email));
+
+      // Load kiosk tokens.  Each row contains an id and short code.
+      const resTokens = await db.query('SELECT id, code FROM "kioskTokens"');
+      kioskTokens.splice(0, kioskTokens.length, ...resTokens.rows.map(r => ({
+        id: r.id,
+        code: r.code
+      })));
+
+      return;
+    } catch (err) {
+      console.error('Failed to load data from database:', err);
+      // Fall through to file-based loading when database read fails
+    }
+  }
+
+  // Fallback to reading from the local JSON file when no database or
+  // database read failure.  If the file does not exist or is malformed,
+  // simply retain the default in-memory values.
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.spaces)) {
+        spaces.splice(0, spaces.length, ...data.spaces);
+      }
+      if (Array.isArray(data.bookings)) {
+        bookings.splice(0, bookings.length, ...data.bookings);
+      }
+      if (Array.isArray(data.admins)) {
+        admins.splice(0, admins.length, ...data.admins);
+      }
+      if (Array.isArray(data.verifiedEmails)) {
+        verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
+      }
+      if (Array.isArray(data.kioskTokens)) {
+        kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load data from JSON file:', err);
+  }
+}
+
+/**
  * Write a timestamped backup of the current data payload.  The backup file
  * name includes the current date and time down to seconds.  Only the most
  * recent BACKUP_RETENTION backups are kept on disk; older backups are
