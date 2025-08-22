@@ -382,17 +382,10 @@ const tokens = {};
 // verificationTokens map token strings to email addresses pending
 // verification. verificationTokens are not persisted and are cleared on
 // restart.
-// Verified end-user email addresses list. Persisted across restarts.  These are the only
-// email addresses allowed to make bookings.  Use a regular const declaration (not a typo)
-// so Node.js can correctly parse and initialise this list.
 const verifiedEmails = [];
-
 const verificationTokens = {};
-
 const kioskTokens = [];
 const kioskSessions = {};
-
-
 
 // Kiosk token management declarations moved to the top of the file. See the
 // Kiosk access configuration section for definitions of kioskTokens and
@@ -511,25 +504,16 @@ async function sendEmail(to, subject, text, attachments = []) {
  * message and delegates to sendEmail().  Any errors during send are
  * reported to the console with a descriptive context.
  *
- * @param {string} name      Name of the user who made the booking
- * @param {string} email     Normalised recipient email address
- * @param {string} space     Human friendly name of the booked space
- * @param {string} date      Booking date (YYYY‑MM‑DD)
- * @param {string} start     Start time (HH:MM)
- * @param {string} end       End time (HH:MM)
+ * @param {string} name     Name of the user who made the booking
+ * @param {string} email    Normalised recipient email address
+ * @param {string} space    Human friendly name of the booked space
+ * @param {string} date     Booking date (YYYY‑MM‑DD)
+ * @param {string} start    Start time (HH:MM)
+ * @param {string} end      End time (HH:MM)
  * @param {string} cancelLink A full URL that allows the user to cancel the booking
  * @param {string} [context] Optional context label for error messages
  */
-async function sendBookingConfirmationEmail(
-  name,
-  email,
-  space,
-  date,
-  start,
-  end,
-  cancelLink,
-  context = ''
-) {
+async function sendBookingConfirmationEmail(name, email, space, date, start, end, cancelLink, context = '') {
   const emailText =
     `Hello ${name},\n\n` +
     `Your booking has been confirmed!\n\n` +
@@ -952,23 +936,10 @@ app.post('/api/bookings', (req, res) => {
   // using either APP_BASE_URL (when set) or the current request's host.  The
   // confirmation includes basic booking details and a cancel link.
   (async () => {
-    try {
-      const spaceName = spaces.find(s => s.id === spaceId)?.name || spaceId;
-      const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
-      const cancelLink = `${baseUrl}/cancel/${id}`;
-      // Use helper to build and send booking confirmation email
-      await sendBookingConfirmationEmail(
-        name,
-        emailNormalized,
-        spaceName,
-        date,
-        startTime,
-        endTime,
-        cancelLink
-      );
-    } catch (err) {
-      console.error('Error sending booking confirmation', err);
-    }
+    const spaceName = spaces.find(s => s.id === spaceId)?.name || spaceId;
+    const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const cancelLink = `${baseUrl}/cancel/${id}`;
+    await sendBookingConfirmationEmail(name, emailNormalized, spaceName, date, startTime, endTime, cancelLink);
   })();
   res.json({ id });
 });
@@ -1073,24 +1044,10 @@ app.get('/api/bookings/auto', (req, res) => {
       saveData();
       // Send booking confirmation email asynchronously
       (async () => {
-        try {
-          const spaceName = space.name;
-          const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
-          const cancelLink = `${baseUrl}/cancel/${id}`;
-          // Use helper to build and send booking confirmation email (auto context)
-          await sendBookingConfirmationEmail(
-            name,
-            emailNormalized,
-            spaceName,
-            date,
-            startTime,
-            endTime,
-            cancelLink,
-            'auto'
-          );
-        } catch (err) {
-          console.error('Error sending booking confirmation (auto)', err);
-        }
+        const spaceName = space.name;
+        const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const cancelLink = `${baseUrl}/cancel/${id}`;
+        await sendBookingConfirmationEmail(name, emailNormalized, spaceName, date, startTime, endTime, cancelLink, 'auto');
       })();
       return res.json({ id, spaceName: space.name });
     }

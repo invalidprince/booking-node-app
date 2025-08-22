@@ -441,32 +441,20 @@
         const startTime = convertTo24h(startStr);
         const endTime = convertTo24h(endStr);
 
-        // Client‑side check: prevent booking a date/time in the past relative to Eastern time zone.
-        try {
-          const selectedStart = new Date(`${date}T${startTime}:00`);
-          const easternNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-          if (selectedStart < easternNow) {
-            alert('Cannot book a date/time in the past.');
-            return;
-          }
-        } catch (err) {
-          // ignore parse errors
-        }
-
         const body = { name, email, date, startTime, endTime, spaceId };
 
-        // Recurrence payload – send as `recurring` rather than `recurrence` to align with API
+        // Recurrence payload
         const type = document.getElementById('bRecurrenceType').value;
         if (type === 'day') {
           const day = parseInt(document.getElementById('bRecurrenceDay').value, 10);
-          if (!isNaN(day)) body.recurring = { frequency: 'monthly', dayOfMonth: day };
+          if (!isNaN(day)) body.recurrence = { frequency: 'monthly', dayOfMonth: day };
         } else if (type === 'weekday') {
           const nth = parseInt(document.getElementById('bRecurrenceNth').value, 10);
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
-          if (!isNaN(nth) && !isNaN(weekday)) body.recurring = { frequency: 'monthly', nth, weekday };
+          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency: 'monthly', nth, weekday };
         } else if (type === 'weekly') {
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
-          if (!isNaN(weekday)) body.recurring = { frequency: 'weekly', weekday };
+          if (!isNaN(weekday)) body.recurrence = { frequency: 'weekly', weekday };
         }
 
         const res = await fetch('/api/bookings', setAuthHeaders({
