@@ -292,6 +292,95 @@ async function saveData() {
 }
 
 /**
+ * Load persisted spaces, bookings, admins, verified emails and kiosk tokens
+ * into the in‑memory arrays. When a database connection is configured,
+ * records will also be loaded from the database tables. This function
+ * gracefully handles missing files and logs any errors encountered.  It
+ * should be safe to call multiple times; each call replaces the existing
+ * contents of the arrays.
+ */
+async function loadData() {
+  // Start with JSON file if it exists.  This supports local development
+  // and serves as a fallback when the database is unavailable.
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const json = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      if (json.spaces && Array.isArray(json.spaces)) {
+        spaces.splice(0, spaces.length, ...json.spaces);
+      }
+      if (json.bookings && Array.isArray(json.bookings)) {
+        bookings.splice(0, bookings.length, ...json.bookings);
+      }
+      if (json.admins && Array.isArray(json.admins)) {
+        admins.splice(0, admins.length, ...json.admins);
+      }
+      if (json.verifiedEmails && Array.isArray(json.verifiedEmails)) {
+        verifiedEmails.splice(0, verifiedEmails.length, ...json.verifiedEmails);
+      }
+      if (json.kioskTokens && Array.isArray(json.kioskTokens)) {
+        kioskTokens.splice(0, kioskTokens.length, ...json.kioskTokens);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load data from JSON file:', err);
+  }
+  // Load data from Postgres if a connection is available.  Each table is
+  // queried individually and missing tables/columns will simply be
+  // ignored.  Errors are logged but do not prevent further execution.
+  if (db) {
+    try {
+      // Load spaces
+      const resSpaces = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
+      if (resSpaces && resSpaces.rows) {
+        spaces.splice(0, spaces.length, ...resSpaces.rows.map(r => ({ id: r.id, name: r.name, type: r.type, priorityOrder: r.priorityOrder })));
+      }
+      // Load admins
+      const resAdmins = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
+      if (resAdmins && resAdmins.rows) {
+        admins.splice(0, admins.length, ...resAdmins.rows.map(r => ({ id: r.id, username: r.username, passwordHash: r.passwordHash, salt: r.salt, role: r.role })));
+      }
+      // Load bookings
+      const resBookings = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
+      if (resBookings && resBookings.rows) {
+        bookings.splice(0, bookings.length, ...resBookings.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          email: r.email,
+          spaceId: r.spaceId,
+          date: r.date,
+          startTime: r.startTime,
+          endTime: r.endTime,
+          recurring: r.recurring,
+          checkInTime: r.checkInTime || undefined,
+          checkOutTime: r.checkOutTime || undefined,
+          cancelled: r.cancelled || false
+        })));
+      }
+      // Load verified emails.  Table name may be quoted due to capitalisation.
+      try {
+        const resEmails = await db.query('SELECT email FROM "verifiedEmails"');
+        if (resEmails && resEmails.rows) {
+          verifiedEmails.splice(0, verifiedEmails.length, ...resEmails.rows.map(r => r.email));
+        }
+      } catch (e) {
+        // Table may not exist; ignore
+      }
+      // Load kiosk tokens
+      try {
+        const resKiosk = await db.query('SELECT id, code FROM "kioskTokens"');
+        if (resKiosk && resKiosk.rows) {
+          kioskTokens.splice(0, kioskTokens.length, ...resKiosk.rows.map(r => ({ id: r.id, code: r.code })));
+        }
+      } catch (e) {
+        // Table may not exist; ignore
+      }
+    } catch (err) {
+      console.error('Failed to load data from database:', err);
+    }
+  }
+}
+
+/**
  * Write a timestamped backup of the current data payload.  The backup file
  * name includes the current date and time down to seconds.  Only the most
  * recent BACKUP_RETENTION backups are kept on disk; older backups are
