@@ -382,11 +382,14 @@ const tokens = {};
 // verificationTokens map token strings to email addresses pending
 // verification. verificationTokens are not persisted and are cleared on
 // restart.
-const verifiedEmails = [];
-const verificationTokens
+cconst verifiedEmails = [];
+
+const verificationTokens = {};
+
 const kioskTokens = [];
 const kioskSessions = {};
-{};
+
+
 
 // Kiosk token management declarations moved to the top of the file. See the
 // Kiosk access configuration section for definitions of kioskTokens and
