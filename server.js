@@ -648,6 +648,31 @@ async function sendBookingConfirmationEmail(
 }
 
 /**
+ * Generate a unique kiosk registration code consisting of six characters.  The
+ * characters are selected from a restricted set to avoid ambiguous
+ * characters (e.g. O vs 0, I vs 1).  The generated code is guaranteed to
+ * be unique among the current kioskTokens array.  If a collision
+ * occurs, a new code is generated until a unique one is found.
+ *
+ * @returns {string} A six‑character alphanumeric kiosk code
+ */
+function generateKioskCode() {
+  // Exclude easily confused characters such as 0, O, I, 1, etc.
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code;
+  do {
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+      const idx = Math.floor(Math.random() * alphabet.length);
+      result += alphabet.charAt(idx);
+    }
+    code = result;
+    // Ensure the generated code does not clash with an existing kiosk token
+  } while (kioskTokens.some(t => t.code && t.code.toUpperCase() === code));
+  return code;
+}
+
+/**
  * Determine whether a recurring rule applies on a particular date.
  *
  * @param {string} dateStr ISO date string (YYYY‑MM‑DD)
