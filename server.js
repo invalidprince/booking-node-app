@@ -377,6 +377,14 @@ const admins = [
 // Logged‑in admin tokens map token -> adminId
 const tokens = {};
 
+// Password reset tokens map token -> { adminId, expires }
+// Each entry represents a single-use password reset request. When a user
+// requests a password reset, a new UUID token is generated and stored
+// with the associated admin's ID and an expiry timestamp. Tokens are
+// removed once used or when expired. Because these tokens live only in
+// memory they will be cleared if the server restarts.
+const passwordResetTokens = {};
+
 // Verified end‑user email addresses. Only these addresses are allowed to make
 // bookings. This list is persisted across restarts. The corresponding
 // verificationTokens map token strings to email addresses pending
@@ -735,6 +743,95 @@ app.post('/api/login', (req, res) => {
   } catch (e) {
     console.error('Login error', e);
     return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Request a password reset for an admin account.  This endpoint accepts
+// either a `username` or `email` field in the POST body.  When an
+// existing admin is found a one‑time token is generated, stored in
+// passwordResetTokens and an email is sent containing a link to the
+// password reset page.  For security reasons the response does not
+// reveal whether the account exists.
+app.post('/api/forgot-password', async (req, res) => {
+  try {
+    const { username, email } = req.body || {};
+    const address = (username || email || '').toLowerCase().trim();
+    if (!address) {
+      return res.status(400).json({ error: 'Missing email/username' });
+    }
+    // Find the admin record by username (email).  Admin usernames are email
+    // addresses and are stored exactly as provided, so normalise both
+    // sides to lower case.
+    const admin = admins.find(a => a.username && a.username.toLowerCase() === address);
+    if (admin) {
+      // Generate a one‑time token and store with expiry (1 hour)
+      const token = uuidv4();
+      passwordResetTokens[token] = { adminId: admin.id, expires: Date.now() + 3600 * 1000 };
+      // Build the base URL for the reset link.  Prefer APP_BASE_URL when
+      // defined; otherwise derive from the incoming request.  This allows
+      // resets to work when the app is hosted behind a proxy or different
+      // domain.
+      let baseUrl = APP_BASE_URL;
+      if (!baseUrl) {
+        const protocol = req.protocol;
+        const host = req.get('host');
+        baseUrl = protocol + '://' + host;
+      }
+      const resetLink = `${baseUrl}/new-password.html?token=${token}`;
+      const subject = 'Password Reset Request';
+      const text = `You have requested to reset your password.\n\n` +
+        `Please click the link below to choose a new password:\n${resetLink}\n\n` +
+        `If you did not request this, you can safely ignore this email.`;
+      try {
+        await sendEmail(admin.username, subject, text);
+      } catch (err) {
+        console.error('Error sending password reset email', err);
+      }
+    }
+    // Always return a generic OK response regardless of whether the admin
+    // exists.  This prevents account enumeration via the API.
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('forgot-password error', err);
+    return res.status(500).json({ error: 'Password reset request failed' });
+  }
+});
+
+// Complete a password reset.  Clients send the reset `token` and a new
+// `password`.  The server verifies the token, ensures it has not
+// expired and applies the new password to the corresponding admin.  Tokens
+// are single‑use and removed after a successful reset.  Responds with
+// an error if the token is invalid or expired.
+app.post('/api/reset-password', (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    if (!token || !password) {
+      return res.status(400).json({ error: 'Missing token or password' });
+    }
+    const entry = passwordResetTokens[token];
+    if (!entry || entry.expires < Date.now()) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+    const admin = admins.find(a => a.id === entry.adminId);
+    if (!admin) {
+      // Remove the token even if the admin cannot be found.  This
+      // situation should not occur but guards against token reuse.
+      delete passwordResetTokens[token];
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+    // Hash the new password and update the admin record.  Remove any
+    // legacy plain text password field for security reasons.
+    const creds = hashPassword(String(password));
+    admin.passwordHash = creds.hash;
+    admin.salt = creds.salt;
+    if (admin.password) delete admin.password;
+    // Persist the updated admins and remove the used token
+    delete passwordResetTokens[token];
+    saveData();
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('reset-password error', err);
+    return res.status(500).json({ error: 'Password reset failed' });
   }
 });
 
