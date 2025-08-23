@@ -568,7 +568,10 @@
     async function loadBookings() {
       if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
       const { offset, limit } = window._pageState;
-      fetch(`/api/bookings?upcoming=1&sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
+      // Return the fetch promise so callers can await completion. This
+      // ensures that callers like addBooking() wait for the table to
+      // finish updating before continuing.
+      return fetch(`/api/bookings?upcoming=1&sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
         .then(r => r.json())
         .then(data => {
           const items = Array.isArray(data) ? data : (data.items || []);
@@ -648,6 +651,8 @@
         }));
 
         if (res.ok) {
+          // Reset to the first page so the newly added booking appears at the top
+          if (window._pageState) window._pageState.offset = 0;
           await loadBookings();
           // optional: clear inputs
           // document.getElementById('bName').value = '';
