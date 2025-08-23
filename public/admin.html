@@ -36,6 +36,24 @@
       <button id="loginBtn" type="button">Login</button>
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
+    <!-- Password reset link -->
+    <div style="margin-top:8px;">
+      <a href="#" id="forgotPasswordLink">Forgot password?</a>
+    </div>
+  </div>
+
+  <!-- Password reset request card (hidden by default) -->
+  <div id="forgotCard" class="card hidden">
+    <h2>Reset Password</h2>
+    <p>Enter your admin email and we'll send a reset link.</p>
+    <div class="row">
+      <input id="resetEmail" placeholder="Email">
+      <button id="resetBtn" type="button">Send Reset Link</button>
+    </div>
+    <div id="resetStatus" style="color:#b00;margin-top:8px;"></div>
+    <div style="margin-top:8px;">
+      <a href="#" id="backToLoginLink">Back to login</a>
+    </div>
   </div>
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
       <h2>Bookings</h2>
@@ -859,6 +877,88 @@
       }
     }
 
+    // ----- Password reset helpers -----
+    /**
+     * Show the password reset request card and hide the login form.
+     * Clears any previous status messages or inputs.
+     */
+    function showForgotCard(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const loginCard = document.getElementById('loginCard');
+      const forgotCard = document.getElementById('forgotCard');
+      const loginStatus = document.getElementById('loginStatus');
+      const resetStatus = document.getElementById('resetStatus');
+      if (loginStatus) loginStatus.textContent = '';
+      if (resetStatus) {
+        resetStatus.textContent = '';
+        resetStatus.style.color = '#b00';
+      }
+      const resetEmail = document.getElementById('resetEmail');
+      if (resetEmail) resetEmail.value = '';
+      if (loginCard) loginCard.classList.add('hidden');
+      if (forgotCard) forgotCard.classList.remove('hidden');
+    }
+
+    /**
+     * Return to the login form from the reset request card.
+     */
+    function backToLogin(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const loginCard = document.getElementById('loginCard');
+      const forgotCard = document.getElementById('forgotCard');
+      const resetStatus = document.getElementById('resetStatus');
+      if (resetStatus) resetStatus.textContent = '';
+      const resetEmail = document.getElementById('resetEmail');
+      if (resetEmail) resetEmail.value = '';
+      if (forgotCard) forgotCard.classList.add('hidden');
+      if (loginCard) loginCard.classList.remove('hidden');
+    }
+
+    /**
+     * Send a password reset request to the server using the supplied email.
+     */
+    async function sendReset(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const status = document.getElementById('resetStatus');
+      const btn = document.getElementById('resetBtn');
+      if (status) {
+        status.style.color = '#b00';
+        status.textContent = '';
+      }
+      const emailInput = document.getElementById('resetEmail');
+      const email = emailInput ? emailInput.value.trim() : '';
+      if (!email) {
+        if (status) status.textContent = 'Please enter your email.';
+        return;
+      }
+      if (btn) btn.disabled = true;
+      try {
+        const res = await fetch('/api/request-password-reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        });
+        // Always treat non‑200 as error; the API returns 200 regardless of
+        // account existence to avoid user enumeration, but may return 4xx
+        // for malformed input
+        if (res.ok) {
+          if (status) {
+            status.style.color = 'green';
+            status.textContent = 'If an account exists for that email, a reset link has been sent.';
+          }
+        } else {
+          let data = {};
+          try { data = await res.clone().json(); } catch (_) {}
+          if (status) status.textContent = (data && data.error) || 'Error sending reset link.';
+        }
+      } catch (err) {
+        console.error('Password reset request error', err);
+        if (status) status.textContent = 'Network error. Try again later.';
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     // One-time DOM wiring
     document.addEventListener('DOMContentLoaded', () => {
       updateSettingsLinkIfNeeded();
@@ -891,6 +991,11 @@
       on('loadAnalyticsBtn','click', loadAnalytics);
       on('loadSummaryBtn','click', loadSummary);
       on('downloadCsvBtn','click', downloadCsv);
+
+      // Bind password reset related events
+      on('forgotPasswordLink', 'click', showForgotCard);
+      on('backToLoginLink', 'click', backToLogin);
+      on('resetBtn', 'click', sendReset);
 
       // Global error banner
       window.addEventListener('error', (e) => {
