@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Kiosk Booking</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f9f9f9; margin: 0; padding: 20px; }
+    h1 { text-align: center; color: #333; }
+    /* Make cards responsive on mobile: fill available width with a reasonable max. */
+    .card {
+      background: white;
+      padding: 20px;
+      margin: 0 auto 20px auto;
+      width: 100%;
+      max-width: 600px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .field { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 4px; color: #555; }
+    input[type="text"], input[type="email"], input[type="date"], select {
+      width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;
+    }
+    button { background: #007bff; color: white; padding: 10px 16px; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #fafafa; }
+    /* Table styles for availability grouping */
+    table.availability-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    table.availability-table th,
+    table.availability-table td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: left;
+    }
+    table.availability-table th {
+      background: #fafafa;
+    }
+    .status { margin-top: 15px; min-height: 20px; color: #333; }
+    .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
+    .yes { color: #2e7d32; font-weight: bold; }
+    .no { color: #c62828; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Kiosk Booking and Check-In</h1>
+  <div class="card">
+    <h2>Today's Bookings</h2>
+    <table id="todayTable">
+      <thead>
+        <tr><th>Name</th><th>Space</th><th>Start</th><th>End</th><th>Status</th><th>Action</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Book a Space</h2>
+    <div class="field">
+      <label for="name">Full Name</label>
+      <input type="text" id="name" placeholder="Your name">
+    </div>
+    <div class="field">
+      <label for="email">Email Address</label>
+      <input type="email" id="email" placeholder="you@example.com">
+    </div>
+    <div class="field">
+      <label for="date">Date</label>
+      <input type="date" id="date">
+    </div>
+    <div class="field">
+      <label for="start-time">Start Time</label>
+      <input type="text" id="start-time" readonly placeholder="Select time">
+    </div>
+    <div class="field">
+      <label for="end-time">End Time</label>
+      <input type="text" id="end-time" readonly placeholder="Select time">
+    </div>
+    <div class="field">
+      <label for="space">Space</label>
+      <select id="space"></select>
+    </div>
+    <button id="book-btn" type="button">Book</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card" id="availability-section">
+    <h2>Check Space Availability</h2>
+    <div class="field">
+      <label for="avDate">Date</label>
+      <input type="date" id="avDate">
+    </div>
+    <div class="field">
+      <label for="avSpace">Space</label>
+      <select id="avSpace"></select>
+    </div>
+    <button id="checkBtn" type="button">Check Availability</button>
+    <div id="results"></div>
+  </div>
+
+  <script>
+    // Populate spaces and auto-book options
+    async function populateSpaces() {
+      try {
+        const res = await fetch('/api/spaces');
+        const spaces = await res.json();
+        const select = document.getElementById('space');
+        select.innerHTML = '';
+        // Auto-book options
+        const autoDesk = document.createElement('option');
+        autoDesk.value = 'auto-desk';
+        autoDesk.textContent = 'Auto book Desk';
+        select.appendChild(autoDesk);
+        const autoOffice = document.createElement('option');
+        autoOffice.value = 'auto-office';
+        autoOffice.textContent = 'Auto book Office';
+        select.appendChild(autoOffice);
+        spaces.forEach(space => {
+          const opt = document.createElement('option');
+          opt.value = space.id;
+          opt.textContent = space.name;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    // Populate spaces for availability (no auto options)
+    async function populateAvailSpaces() {
+      try {
+        const res = await fetch('/api/spaces');
+        const data = await res.json();
+        const sel = document.getElementById('avSpace');
+        sel.innerHTML = '';
+        data.forEach(space => {
+          const opt = document.createElement('option');
+          opt.value = space.id;
+          opt.textContent = space.name;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    // Convert 12h time to 24h format
+    function convertTo24h(str) {
+      if (!str) return '';
+      const parts = str.trim().split(' ');
+      if (parts.length < 2) return str;
+      const time = parts[0], period = parts[1];
+      let [hour, minute] = time.split(':');
+      hour = parseInt(hour, 10);
+      if (period === 'PM' && hour !== 12) hour += 12;
+      if (period === 'AM' && hour === 12) hour = 0;
+      return `${hour.toString().padStart(2, '0')}:${minute}`;
+    }
+    // Convert 24h to 12h for display
+    function to12Hour(time) {
+      if (typeof time !== 'string' || !time.includes(':')) return time;
+      const [hStr, m] = time.split(':');
+      let h = parseInt(hStr, 10);
+      if (isNaN(h)) return time;
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12;
+      if (h === 0) h = 12;
+      return `${h}:${m} ${ampm}`;
+    }
+    // Create a time picker
+    function createTimePicker(inputId) {
+      const input = document.getElementById(inputId);
+      const container = document.createElement('div');
+      container.className = 'timepicker-dropdown';
+      container.style.position = 'absolute';
+      container.style.display = 'none';
+      container.style.background = '#fff';
+      container.style.border = '1px solid #ccc';
+      container.style.padding = '6px';
+      container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
+      container.style.zIndex = 1000;
+      const hourSelect = document.createElement('select');
+      for (let i = 1; i <= 12; i++) {
+        const opt = document.createElement('option');
+        opt.value = i < 10 ? '0' + i : '' + i;
+        opt.textContent = opt.value;
+        hourSelect.appendChild(opt);
+      }
+      const minuteSelect = document.createElement('select');
+      ['00','15','30','45'].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        minuteSelect.appendChild(opt);
+      });
+      const periodSelect = document.createElement('select');
+      ['AM','PM'].forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        periodSelect.appendChild(opt);
+      });
+      const setBtn = document.createElement('button');
+      setBtn.type = 'button';
+      setBtn.textContent = 'Set';
+      setBtn.style.marginLeft = '8px';
+      setBtn.onclick = () => {
+        const value = `${hourSelect.value}:${minuteSelect.value} ${periodSelect.value}`;
+        input.value = value;
+        container.style.display = 'none';
+      };
+      container.appendChild(hourSelect);
+      container.appendChild(minuteSelect);
+      container.appendChild(periodSelect);
+      container.appendChild(setBtn);
+      document.body.appendChild(container);
+      input.addEventListener('focus', () => {
+        const rect = input.getBoundingClientRect();
+        container.style.left = `${rect.left + window.scrollX}px`;
+        container.style.top = `${rect.bottom + window.scrollY + 2}px`;
+        container.style.display = 'block';
+      });
+      document.addEventListener('click', (e) => {
+        if (e.target !== input && !container.contains(e.target)) {
+          container.style.display = 'none';
+        }
+      });
+    }
+    // Load today's bookings and populate table
+    async function loadToday() {
+      try {
+        const res = await fetch('/api/bookings/today');
+        const data = await res.json();
+        const tbody = document.getElementById('todayTable').querySelector('tbody');
+        tbody.innerHTML = '';
+        data.forEach(b => {
+          const tr = document.createElement('tr');
+          const status = b.checkedIn ? 'Checked In' : 'Not Checked In';
+          tr.innerHTML = `<td>${b.name}</td><td>${b.spaceName}</td><td>${to12Hour(b.startTime)}</td><td>${to12Hour(b.endTime)}</td><td>${status}</td>`;
+          const actionTd = document.createElement('td');
+          const btn = document.createElement('button');
+          btn.textContent = b.checkedIn ? '✓' : 'Check In';
+          btn.disabled = b.checkedIn;
+          btn.addEventListener('click', async () => {
+            await fetch(`/api/bookings/${b.id}/checkin`, { method: 'POST' });
+            loadToday();
+          });
+          actionTd.appendChild(btn);
+          tr.appendChild(actionTd);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    // Booking submission
+    async function doBook() {
+      const name = document.getElementById('name').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const date = document.getElementById('date').value;
+      const startRaw = document.getElementById('start-time').value;
+      const endRaw = document.getElementById('end-time').value;
+      const spaceVal = document.getElementById('space').value;
+      const statusEl = document.getElementById('status');
+      statusEl.style.color = '#333';
+      if (!name || !email || !date || !startRaw || !endRaw || !spaceVal) {
+        statusEl.textContent = 'Please fill in all fields.';
+        return;
+      }
+      const emailNorm = email.toLowerCase().trim();
+      if (!emailNorm.endsWith('@fbhi.net')) {
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'Email must be a @fbhi.net address.';
+        return;
+      }
+      const startTime = convertTo24h(startRaw);
+      const endTime = convertTo24h(endRaw);
+      try {
+        if (spaceVal.startsWith('auto-')) {
+          const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
+          const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
+          const res = await fetch('/api/bookings/auto?' + params.toString());
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.style.color = 'green';
+            statusEl.textContent = `Success! Reserved ${data.spaceName} on ${date}.`;
+            loadToday();
+          } else {
+            const err = await res.json();
+            statusEl.style.color = 'red';
+            statusEl.textContent = err.error || 'Auto-book failed.';
+          }
+        } else {
+          const res = await fetch('/api/bookings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email, spaceId: spaceVal, date, startTime, endTime, recurring: false })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            statusEl.style.color = 'green';
+            statusEl.textContent = `Success! Your booking ID is ${data.id}.`;
+            loadToday();
+          } else {
+            const err = await res.json();
+            statusEl.style.color = 'red';
+            statusEl.textContent = err.error || 'Booking failed.';
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.style.color = 'red';
+        statusEl.textContent = 'An error occurred while booking.';
+      }
+    }
+    // Generate time slots for availability
+    function generateTimeSlots() {
+      const slots = [];
+      const pad = n => String(n).padStart(2, '0');
+      // Generate 30‑minute slots covering the full 24‑hour day.  We use
+      // modulo arithmetic to roll over at midnight.
+      for (let hour = 0; hour < 24; hour++) {
+        const h1 = pad(hour);
+        const h2 = pad((hour + 1) % 24);
+        slots.push({ start: `${h1}:00`, end: `${h1}:30` });
+        slots.push({ start: `${h1}:30`, end: `${h2}:00` });
+      }
+      return slots;
+    }
+    // Check availability for a selected space on a given date.  Generate
+    // 30‑minute slots for the entire day, fetch availability for each slot
+    // and then group contiguous slots into longer segments (available or
+    // unavailable).  The results are displayed in a concise table.
+    async function checkAvailability() {
+      const date = document.getElementById('avDate').value;
+      const spaceId = document.getElementById('avSpace').value;
+      const resultsDiv = document.getElementById('results');
+      resultsDiv.innerHTML = '';
+      if (!date || !spaceId) {
+        resultsDiv.textContent = 'Please select a date and space.';
+        return;
+      }
+      // Determine the type of the selected space
+      let spacesList = [];
+      try {
+        const resSpaces = await fetch('/api/spaces');
+        spacesList = await resSpaces.json();
+      } catch (err) {
+        console.error(err);
+      }
+      const selected = spacesList.find(s => s.id === spaceId);
+      if (!selected) {
+        resultsDiv.textContent = 'Invalid space.';
+        return;
+      }
+      const slots = generateTimeSlots();
+      // Fetch availability for each slot in parallel
+      const promises = slots.map(async ({ start, end }) => {
+        const params = new URLSearchParams({ date, start, end });
+        params.append('type', selected.type);
+        const res = await fetch('/api/availability?' + params.toString());
+        const avail = await res.json();
+        const isAvail = avail.some(s => s.id === spaceId);
+        return { start, end, available: isAvail };
+      });
+      const results = await Promise.all(promises);
+      // Group contiguous slots into segments
+      const segments = [];
+      let current = null;
+      results.forEach(r => {
+        if (!current) {
+          current = { start: r.start, end: r.end, available: r.available };
+        } else if (r.available === current.available) {
+          current.end = r.end;
+        } else {
+          segments.push(current);
+          current = { start: r.start, end: r.end, available: r.available };
+        }
+      });
+      if (current) segments.push(current);
+      // Build aggregated table
+      const table = document.createElement('table');
+      table.className = 'availability-table';
+      const thead = document.createElement('thead');
+      thead.innerHTML = '<tr><th>Time Range</th><th>Status</th></tr>';
+      table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      segments.forEach(seg => {
+        const tr = document.createElement('tr');
+        const rangeLabel = `${to12Hour(seg.start)} - ${to12Hour(seg.end)}`;
+        const statusLabel = seg.available ? 'Available' : 'Unavailable';
+        const statusClass = seg.available ? 'yes' : 'no';
+        tr.innerHTML = `<td>${rangeLabel}</td><td class="${statusClass}">${statusLabel}</td>`;
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      resultsDiv.appendChild(table);
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      populateSpaces();
+      populateAvailSpaces();
+      createTimePicker('start-time');
+      createTimePicker('end-time');
+      document.getElementById('book-btn').addEventListener('click', doBook);
+      document.getElementById('checkBtn').addEventListener('click', checkAvailability);
+      loadToday();
+    });
+  </script>
+</body>
+</html>

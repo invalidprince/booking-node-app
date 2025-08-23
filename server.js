@@ -292,95 +292,6 @@ async function saveData() {
 }
 
 /**
- * Load persisted spaces, bookings, admins, verified emails and kiosk tokens
- * into the in‑memory arrays. When a database connection is configured,
- * records will also be loaded from the database tables. This function
- * gracefully handles missing files and logs any errors encountered.  It
- * should be safe to call multiple times; each call replaces the existing
- * contents of the arrays.
- */
-async function loadData() {
-  // Start with JSON file if it exists.  This supports local development
-  // and serves as a fallback when the database is unavailable.
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      const json = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-      if (json.spaces && Array.isArray(json.spaces)) {
-        spaces.splice(0, spaces.length, ...json.spaces);
-      }
-      if (json.bookings && Array.isArray(json.bookings)) {
-        bookings.splice(0, bookings.length, ...json.bookings);
-      }
-      if (json.admins && Array.isArray(json.admins)) {
-        admins.splice(0, admins.length, ...json.admins);
-      }
-      if (json.verifiedEmails && Array.isArray(json.verifiedEmails)) {
-        verifiedEmails.splice(0, verifiedEmails.length, ...json.verifiedEmails);
-      }
-      if (json.kioskTokens && Array.isArray(json.kioskTokens)) {
-        kioskTokens.splice(0, kioskTokens.length, ...json.kioskTokens);
-      }
-    }
-  } catch (err) {
-    console.error('Failed to load data from JSON file:', err);
-  }
-  // Load data from Postgres if a connection is available.  Each table is
-  // queried individually and missing tables/columns will simply be
-  // ignored.  Errors are logged but do not prevent further execution.
-  if (db) {
-    try {
-      // Load spaces
-      const resSpaces = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
-      if (resSpaces && resSpaces.rows) {
-        spaces.splice(0, spaces.length, ...resSpaces.rows.map(r => ({ id: r.id, name: r.name, type: r.type, priorityOrder: r.priorityOrder })));
-      }
-      // Load admins
-      const resAdmins = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
-      if (resAdmins && resAdmins.rows) {
-        admins.splice(0, admins.length, ...resAdmins.rows.map(r => ({ id: r.id, username: r.username, passwordHash: r.passwordHash, salt: r.salt, role: r.role })));
-      }
-      // Load bookings
-      const resBookings = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
-      if (resBookings && resBookings.rows) {
-        bookings.splice(0, bookings.length, ...resBookings.rows.map(r => ({
-          id: r.id,
-          name: r.name,
-          email: r.email,
-          spaceId: r.spaceId,
-          date: r.date,
-          startTime: r.startTime,
-          endTime: r.endTime,
-          recurring: r.recurring,
-          checkInTime: r.checkInTime || undefined,
-          checkOutTime: r.checkOutTime || undefined,
-          cancelled: r.cancelled || false
-        })));
-      }
-      // Load verified emails.  Table name may be quoted due to capitalisation.
-      try {
-        const resEmails = await db.query('SELECT email FROM "verifiedEmails"');
-        if (resEmails && resEmails.rows) {
-          verifiedEmails.splice(0, verifiedEmails.length, ...resEmails.rows.map(r => r.email));
-        }
-      } catch (e) {
-        // Table may not exist; ignore
-      }
-      // Load kiosk tokens
-      try {
-        const resKiosk = await db.query('SELECT id, code FROM "kioskTokens"');
-        if (resKiosk && resKiosk.rows) {
-          kioskTokens.splice(0, kioskTokens.length, ...resKiosk.rows.map(r => ({ id: r.id, code: r.code })));
-        }
-      } catch (e) {
-        // Table may not exist; ignore
-      }
-    } catch (err) {
-      console.error('Failed to load data from database:', err);
-    }
-  }
-}
-
-/**
  * Write a timestamped backup of the current data payload.  The backup file
  * name includes the current date and time down to seconds.  Only the most
  * recent BACKUP_RETENTION backups are kept on disk; older backups are
@@ -453,15 +364,13 @@ const bookings = [];
 // passwords are always hashed.
 const initialAdminPassword = 'admin123';
 const _initCred = hashPassword(initialAdminPassword);
-// Define default built‑in admin with full privileges.  Use 'superadmin' to
-// represent the highest privilege level instead of the legacy 'owner'.
 const admins = [
   {
     id: uuidv4(),
     username: 'admin@example.com',
     passwordHash: _initCred.hash,
     salt: _initCred.salt,
-    role: 'superadmin'
+    role: 'owner'
   }
 ];
 
@@ -496,12 +405,11 @@ const kioskSessions = {};
 // ---------------------------------------------------------------------------
 // Security helpers
 //
-// Define the available admin roles.  Superadmins have full privileges, admins
-// can perform most actions except managing other admins, analysts can view
+// Define the available admin roles.  Owners have full privileges, admins can
+// perform most actions except managing other admins, analysts can view
 // analytics but not modify data, and frontdesk users have limited booking
-// capabilities (e.g. check‑in).  The legacy 'owner' role has been replaced
-// by 'superadmin'.
-const ROLES = ['superadmin', 'admin', 'analyst', 'frontdesk'];
+// capabilities (e.g. check-in).  You can adjust this list as needed.
+const ROLES = ['owner', 'admin', 'analyst', 'frontdesk'];
 
 /**
  * Hash a plain text password using PBKDF2 with a random salt.  Returns an
@@ -530,21 +438,8 @@ function hashPassword(password) {
 function verifyPassword(password, admin) {
   if (!admin) return false;
   if (admin.passwordHash && admin.salt) {
-    // Determine the expected length of the derived key. Older passwords
-    // may have been hashed with a shorter key length (e.g. 16 bytes -> 32 hex
-    // characters). To maintain compatibility, derive a key whose length
-    // matches the stored hash length. If the stored hash length is odd or
-    // less than 2 characters, fall back to 64 bytes (128 hex).
-    let dkLen = 64; // bytes
-    const hexLen = admin.passwordHash.length;
-    if (hexLen >= 2 && hexLen % 2 === 0) {
-      dkLen = Math.floor(hexLen / 2);
-      // Clamp to minimum of 16 bytes and maximum of 64 bytes
-      if (dkLen < 16) dkLen = 16;
-      if (dkLen > 64) dkLen = 64;
-    }
-    const derived = crypto.pbkdf2Sync(password, admin.salt, 100000, dkLen, 'sha512').toString('hex');
-    return derived === admin.passwordHash;
+    const hash = crypto.pbkdf2Sync(password, admin.salt, 100000, 64, 'sha512').toString('hex');
+    return hash === admin.passwordHash;
   }
   // Legacy plain text fallback
   return admin.password === password;
@@ -805,25 +700,17 @@ function adminAuth(req, res, next) {
   req.adminId = adminId;
   const admin = admins.find(a => a.id === adminId);
   req.admin = admin;
-  // Assign a normalized role. Default to 'admin'.  Previous deployments
-  // allowed both 'super' and 'superadmin' to denote a top‑level admin. We
-  // normalize these to 'superadmin' instead of converting them to 'owner'
-  // so that the role returned to the client reflects the original intent.
-  // Normalise the admin role for permission checks. Start with the stored
-  // role (if any) defaulting to "admin". Roles may have inconsistent
-  // capitalisation or whitespace; trim and lower‑case the string before
-  // applying legacy mappings.  Treat "owner" and "super" as synonyms for
-  // the new unified "superadmin" role.  All other roles are preserved as
-  // lower‑case.  This prevents trailing spaces from breaking access
-  // control and ensures backwards compatibility.
-  let role = admin && admin.role ? String(admin.role) : 'admin';
-  if (typeof role === 'string') {
-    const r = role.trim().toLowerCase();
-    if (r === 'super' || r === 'superadmin' || r === 'owner') {
-      role = 'superadmin';
-    } else {
-      role = r;
-    }
+  // Assign a normalized role.  Some older deployments used a "super" or
+  // "superadmin" role name which was not recognised by the access control
+  // checks throughout the server (e.g. analytics and kiosk endpoints
+  // explicitly check for 'owner', 'admin' or 'analyst').  When an admin has
+  // one of these legacy roles we treat them as an owner.  Otherwise fall
+  // back to the stored role or 'admin' by default.
+  let role = admin && admin.role ? admin.role : 'admin';
+  if (role && typeof role === 'string') {
+    const r = role.toLowerCase();
+    if (r === 'super' || r === 'superadmin') role = 'owner';
+    else role = role; // leave unchanged
   }
   req.adminRole = role;
   next();
@@ -831,64 +718,20 @@ function adminAuth(req, res, next) {
 
 // ----- API routes -----------------------------------------------------------
 // Admin login endpoint
-// Admin login endpoint.  Supports login against the in‑memory admin list
-// and, when a database connection is available, against the `admins` table.
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) {
       return res.status(400).json({ error: 'Missing username or password' });
     }
     const uname = String(username).toLowerCase();
-    // First check the in‑memory admins list
-    let admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
-    // If not found in memory and a database is configured, attempt to load
-    // the admin from the database.  This allows Supabase/Render deployments
-    // to authenticate admins stored in Postgres.
-    if (!admin && db) {
-      try {
-        const result = await db.query(
-          'SELECT id, username, "passwordHash", salt, role FROM admins WHERE lower(username) = $1',
-          [uname]
-        );
-        if (result && result.rows && result.rows.length > 0) {
-          const row = result.rows[0];
-          admin = {
-            id: row.id,
-            username: row.username,
-            passwordHash: row.passwordHash,
-            salt: row.salt,
-            role: row.role || 'admin'
-          };
-          // Cache this admin in memory for subsequent requests
-          const existingIdx = admins.findIndex(a => a.username.toLowerCase() === uname);
-          if (existingIdx >= 0) admins[existingIdx] = admin; else admins.push(admin);
-        }
-      } catch (err) {
-        console.error('DB lookup failed during login', err);
-      }
-    }
-    // If still not found or password invalid, reject
+    const admin = admins.find(a => a.username && a.username.toLowerCase() === uname);
     if (!admin || !verifyPassword(password, admin)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     const token = uuidv4();
     tokens[token] = admin.id;
-    // Normalise the role returned to the client. Default to 'admin'.  Trim
-    // whitespace and lower‑case the value to handle inconsistent
-    // capitalisation.  Map legacy roles 'owner' and 'super' to the
-    // unified 'superadmin' role so existing accounts retain full
-    // privileges.
-    let outRole = admin.role || 'admin';
-    if (typeof outRole === 'string') {
-      const rr = outRole.trim().toLowerCase();
-      if (rr === 'super' || rr === 'superadmin' || rr === 'owner') {
-        outRole = 'superadmin';
-      } else {
-        outRole = rr;
-      }
-    }
-    return res.json({ token, role: outRole });
+    return res.json({ token, role: admin.role || 'admin' });
   } catch (e) {
     console.error('Login error', e);
     return res.status(500).json({ error: 'Login failed' });
@@ -901,8 +744,8 @@ app.get('/api/spaces', (req, res) => {
 });
 
 app.post('/api/spaces', adminAuth, (req, res) => {
-  // Only superadmins and admins can add spaces
-  if (!['superadmin', 'admin'].includes(req.adminRole)) {
+  // Only owners and admins can add spaces
+  if (!['owner', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { name, type, priorityOrder } = req.body;
@@ -917,8 +760,8 @@ app.post('/api/spaces', adminAuth, (req, res) => {
 });
 
 app.delete('/api/spaces/:id', adminAuth, (req, res) => {
-  // Only superadmins and admins can delete spaces
-  if (!['superadmin', 'admin'].includes(req.adminRole)) {
+  // Only owners and admins can delete spaces
+  if (!['owner', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -934,8 +777,8 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 
 // Bookings endpoints
 app.get('/api/bookings', adminAuth, (req, res) => {
-  // Only superadmins and admins can list all bookings
-  if (!['superadmin','admin'].includes(req.adminRole)) {
+  // Only owners and admins can list all bookings
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const result = bookings.map(b => {
@@ -1132,8 +975,8 @@ app.post('/api/bookings', (req, res) => {
 
 // Cancel a booking by ID (admin only)
 app.delete('/api/bookings/:id', adminAuth, (req, res) => {
-  // Only superadmins and admins can delete bookings
-  if (!['superadmin','admin'].includes(req.adminRole)) {
+  // Only owners and admins can delete bookings
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -1257,16 +1100,16 @@ app.get('/api/bookings/auto', (req, res) => {
 
 // Admin user management
 app.get('/api/admins', adminAuth, (req, res) => {
-  // Only superadmins and admins can list admin users
-  if (!['superadmin','admin'].includes(req.adminRole)) {
+  // Only owners and admins can list admin users
+  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(admins.map(a => ({ id: a.id, username: a.username, role: a.role || 'admin' })));
 });
 
 app.post('/api/admins', adminAuth, (req, res) => {
-  // Only superadmins can add new admins
-  if (!['superadmin'].includes(req.adminRole)) {
+  // Only owners can add new admins
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { username, password, role } = req.body;
@@ -1274,8 +1117,8 @@ app.post('/api/admins', adminAuth, (req, res) => {
     return res.status(400).json({ error: 'Missing username or password' });
   }
   const roleNormalized = (role && typeof role === 'string') ? role.toLowerCase() : 'admin';
-  if (!ROLES.includes(roleNormalized) || roleNormalized === 'superadmin') {
-    // Prevent creation of new superadmins via API through this endpoint
+  if (!ROLES.includes(roleNormalized) || roleNormalized === 'owner') {
+    // Prevent creation of new owners via API
     return res.status(400).json({ error: 'Invalid role' });
   }
   if (admins.find(a => a.username === username)) {
@@ -1289,19 +1132,20 @@ app.post('/api/admins', adminAuth, (req, res) => {
 });
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
-  // Only superadmins can delete admins
-  if (!['superadmin'].includes(req.adminRole)) {
+  // Only owners can delete admins
+  if (!['owner','superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
   const index = admins.findIndex(a => a.id === id);
   if (index >= 0) {
-    // Prevent removal of the last superadmin
+    // Prevent removal of the last owner
     const adminToRemove = admins[index];
-    if (adminToRemove.role === 'superadmin') {
-      const superCount = admins.reduce((acc, a) => acc + (a.role === 'superadmin' ? 1 : 0), 0);
-      if (superCount <= 1) {
-        return res.status(400).json({ error: 'Cannot delete the only superadmin' });
+    if (adminToRemove.role === 'owner') {
+      // Count number of owners
+      const ownerCount = admins.reduce((acc, a) => acc + (a.role === 'owner' ? 1 : 0), 0);
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the only owner' });
       }
     }
     admins.splice(index, 1);
@@ -1309,78 +1153,6 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Admin not found' });
-  }
-});
-
-// Allow admins to request a password reset. The client sends the username
-// (email) in the request body; the server generates a new random
-// password, hashes it using the existing salt/hash mechanism, updates
-// the admin's stored credentials, persists the change, and emails the
-// new password to the admin. The response does not include the
-// password.
-app.post('/api/admins/lost-password', async (req, res) => {
-  try {
-    const { username } = req.body || {};
-    if (!username) {
-      return res.status(400).json({ ok: false, error: 'Missing username' });
-    }
-    // Look up admin in memory first
-    let admin = admins.find(a => a.username && a.username.toLowerCase() === username.toLowerCase());
-    // If not found and database is available, query the admins table
-    if (!admin && db) {
-      try {
-        const result = await db.query(
-          'SELECT id, username, "passwordHash", salt, role FROM admins WHERE lower(username) = $1',
-          [username.toLowerCase()]
-        );
-        if (result && result.rows && result.rows.length > 0) {
-          const row = result.rows[0];
-          admin = {
-            id: row.id,
-            username: row.username,
-            passwordHash: row.passwordHash,
-            salt: row.salt,
-            role: row.role || 'admin'
-          };
-          // Cache this admin for future operations
-          const existingIdx = admins.findIndex(a => a.username.toLowerCase() === row.username.toLowerCase());
-          if (existingIdx >= 0) admins[existingIdx] = admin; else admins.push(admin);
-        }
-      } catch (err) {
-        console.error('DB lookup failed during password reset', err);
-      }
-    }
-    if (!admin) {
-      // For security, do not reveal whether the admin exists
-      return res.json({ ok: true, message: 'If the account exists, a reset email has been sent.' });
-    }
-    // Generate a new random password (8 hex characters)
-    const newPassword = crypto.randomBytes(4).toString('hex');
-    const { salt, hash } = hashPassword(newPassword);
-    admin.salt = salt;
-    admin.passwordHash = hash;
-    // Persist changes to file
-    saveData();
-    // Persist to DB if available
-    if (db) {
-      try {
-        await db.query(
-          'UPDATE admins SET "passwordHash" = $1, salt = $2 WHERE id = $3',
-          [hash, salt, admin.id]
-        );
-      } catch (err) {
-        console.error('Failed to update admin password in DB', err);
-      }
-    }
-    try {
-      await sendEmail(admin.username, 'Password Reset', `Your new password is: ${newPassword}`);
-    } catch (err) {
-      console.error('Failed to send password reset email', err);
-    }
-    return res.json({ ok: true, message: 'If the account exists, a reset email has been sent.' });
-  } catch (err) {
-    console.error('lost-password error', err);
-    return res.status(500).json({ ok: false, error: 'internal-error' });
   }
 });
 
@@ -1433,8 +1205,8 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
 // user email and includes counts of bookings by day of the week as well as
 // total hours spent checked in vs not checked in.
 app.get('/api/analytics', adminAuth, (req, res) => {
-  // Only superadmins, admins and analysts can access analytics
-  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins and analysts can access analytics
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   // Determine date range from query parameters
@@ -1574,8 +1346,8 @@ app.get('/api/analytics', adminAuth, (req, res) => {
 // monthly check‑in hours, monthly no‑show hours and overall utilisation
 // percentage (booked hours vs total available hours for all offices).
 app.get('/api/analytics-summary', adminAuth, (req, res) => {
-  // Only superadmins, admins and analysts can access summary
-  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins and analysts can access summary
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
@@ -1702,8 +1474,8 @@ app.get('/api/analytics-summary', adminAuth, (req, res) => {
 // hours, check‑in count and no‑check‑in count.  Returned as a text/csv
 // attachment.
 app.get('/api/analytics-export', adminAuth, (req, res) => {
-  // Only superadmins, admins and analysts can export analytics
-  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins and analysts can export analytics
+  if (!['owner','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
@@ -1815,7 +1587,7 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
 app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
   // Permit superadmins to manage kiosk tokens as well.  Previously superadmins
   // were excluded which prevented them from viewing tokens in the settings UI.
-  if (!['superadmin', 'admin'].includes(req.adminRole)) {
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(kioskTokens);
@@ -1827,7 +1599,7 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // setup. The token remains valid until explicitly revoked by an admin.
 app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
   // Allow superadmins to generate kiosk tokens in addition to owners and admins.
-  if (!['superadmin', 'admin'].includes(req.adminRole)) {
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const id = uuidv4();
@@ -1844,7 +1616,7 @@ app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
 app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
   // Allow superadmins to revoke kiosk tokens.  Without this, superadmins
   // could not perform deletions in the admin settings page.
-  if (!['superadmin', 'admin'].includes(req.adminRole)) {
+  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
