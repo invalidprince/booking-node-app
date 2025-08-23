@@ -938,7 +938,8 @@ app.get('/api/spaces', (req, res) => {
 
 app.post('/api/spaces', adminAuth, (req, res) => {
   // Only owners and admins can add spaces
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow owners, superadmins and admins to add spaces
+  if (!['owner', 'superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { name, type, priorityOrder } = req.body;
@@ -954,7 +955,8 @@ app.post('/api/spaces', adminAuth, (req, res) => {
 
 app.delete('/api/spaces/:id', adminAuth, (req, res) => {
   // Only owners and admins can delete spaces
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Allow owners, superadmins and admins to delete spaces
+  if (!['owner', 'superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
