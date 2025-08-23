@@ -84,7 +84,8 @@
         </select>
       </div>
       <div class="row" style="justify-content: space-between; align-items: center; margin: 8px 0;">
-        <div><strong>Bookings (upcoming)</strong></div>
+        <!-- Update heading to reflect that we now load all bookings (not just upcoming) -->
+        <div><strong>Bookings</strong></div>
         <div>
           <button id="prevPageBtn">&lt; Prev</button>
           <span id="pageInfo" style="margin:0 8px;"></span>
@@ -571,7 +572,13 @@
       // Return the fetch promise so callers can await completion. This
       // ensures that callers like addBooking() wait for the table to
       // finish updating before continuing.
-      return fetch(`/api/bookings?upcoming=1&sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
+      // Fetch bookings from the server.  We previously included
+      // `upcoming=1` in the query which filtered out past bookings.  This
+      // meant admins could only see upcoming bookings even though the
+      // database contained historical bookings.  Removing the upcoming
+      // filter allows the full set of bookings (subject to pagination) to
+      // be displayed.
+      return fetch(`/api/bookings?sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
         .then(r => r.json())
         .then(data => {
           const items = Array.isArray(data) ? data : (data.items || []);
