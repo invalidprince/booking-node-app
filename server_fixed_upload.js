@@ -453,13 +453,15 @@ const bookings = [];
 // passwords are always hashed.
 const initialAdminPassword = 'admin123';
 const _initCred = hashPassword(initialAdminPassword);
+// Define default built‑in admin with full privileges.  Use 'superadmin' to
+// represent the highest privilege level instead of the legacy 'owner'.
 const admins = [
   {
     id: uuidv4(),
     username: 'admin@example.com',
     passwordHash: _initCred.hash,
     salt: _initCred.salt,
-    role: 'owner'
+    role: 'superadmin'
   }
 ];
 
@@ -491,7 +493,7 @@ const kioskSessions = {};
 // perform most actions except managing other admins, analysts can view
 // analytics but not modify data, and frontdesk users have limited booking
 // capabilities (e.g. check-in).  You can adjust this list as needed.
-const ROLES = ['owner', 'admin', 'analyst', 'frontdesk'];
+const ROLES = ['superadmin', 'admin', 'analyst', 'frontdesk'];
 
 /**
  * Hash a plain text password using PBKDF2 with a random salt.  Returns an
@@ -781,17 +783,18 @@ function adminAuth(req, res, next) {
   req.adminId = adminId;
   const admin = admins.find(a => a.id === adminId);
   req.admin = admin;
-  // Assign a normalized role.  Some older deployments used a "super" or
-  // "superadmin" role name which was not recognised by the access control
-  // checks throughout the server (e.g. analytics and kiosk endpoints
-  // explicitly check for 'owner', 'admin' or 'analyst').  When an admin has
-  // one of these legacy roles we treat them as an owner.  Otherwise fall
-  // back to the stored role or 'admin' by default.
-  let role = admin && admin.role ? admin.role : 'admin';
-  if (role && typeof role === 'string') {
+  // Assign a normalized role. Default to 'admin'.  Previous deployments
+  // allowed both 'super' and 'superadmin' to denote a top‑level admin. We
+  // normalize these to 'superadmin' instead of converting them to 'owner'
+  // so that the role returned to the client reflects the original intent.
+  let role = admin && admin.role ? String(admin.role) : 'admin';
+  if (typeof role === 'string') {
     const r = role.toLowerCase();
-    if (r === 'super' || r === 'superadmin') role = 'owner';
-    else role = role; // leave unchanged
+    // Normalise roles: treat "super", "superadmin" and legacy "owner"
+    // as unified superadmin to avoid locking out older accounts.
+    if (r === 'super' || r === 'superadmin' || r === 'owner') {
+      role = 'superadmin';
+    }
   }
   req.adminRole = role;
   next();
@@ -842,7 +845,17 @@ app.post('/api/login', async (req, res) => {
     }
     const token = uuidv4();
     tokens[token] = admin.id;
-    return res.json({ token, role: admin.role || 'admin' });
+    // Normalize role sent to the client. Default to 'admin'. For backward
+    // compatibility treat both 'super' and 'superadmin' as 'superadmin'.
+    let outRole = admin.role || 'admin';
+    if (typeof outRole === 'string') {
+      const rr = outRole.toLowerCase();
+      // Normalise role for backward compatibility: treat "owner" as "superadmin"
+      if (rr === 'super' || rr === 'superadmin' || rr === 'owner') {
+        outRole = 'superadmin';
+      }
+    }
+    return res.json({ token, role: outRole });
   } catch (e) {
     console.error('Login error', e);
     return res.status(500).json({ error: 'Login failed' });
@@ -855,8 +868,8 @@ app.get('/api/spaces', (req, res) => {
 });
 
 app.post('/api/spaces', adminAuth, (req, res) => {
-  // Only owners and admins can add spaces
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Only superadmins and admins can add spaces
+  if (!['superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { name, type, priorityOrder } = req.body;
@@ -871,8 +884,8 @@ app.post('/api/spaces', adminAuth, (req, res) => {
 });
 
 app.delete('/api/spaces/:id', adminAuth, (req, res) => {
-  // Only owners and admins can delete spaces
-  if (!['owner', 'admin'].includes(req.adminRole)) {
+  // Only superadmins and admins can delete spaces
+  if (!['superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -888,8 +901,8 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 
 // Bookings endpoints
 app.get('/api/bookings', adminAuth, (req, res) => {
-  // Only owners and admins can list all bookings
-  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
+  // Only superadmins and admins can list all bookings
+  if (!['superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const result = bookings.map(b => {
@@ -1073,8 +1086,8 @@ app.post('/api/bookings', (req, res) => {
 
 // Cancel a booking by ID (admin only)
 app.delete('/api/bookings/:id', adminAuth, (req, res) => {
-  // Only owners and admins can delete bookings
-  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
+  // Only superadmins and admins can delete bookings
+  if (!['superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
@@ -1184,16 +1197,16 @@ app.get('/api/bookings/auto', (req, res) => {
 
 // Admin user management
 app.get('/api/admins', adminAuth, (req, res) => {
-  // Only owners and admins can list admin users
-  if (!['owner','superadmin','admin'].includes(req.adminRole)) {
+  // Only superadmins and admins can list admin users
+  if (!['superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(admins.map(a => ({ id: a.id, username: a.username, role: a.role || 'admin' })));
 });
 
 app.post('/api/admins', adminAuth, (req, res) => {
-  // Only owners can add new admins
-  if (!['owner','superadmin'].includes(req.adminRole)) {
+  // Only superadmins can add new admins
+  if (!['superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { username, password, role } = req.body;
@@ -1201,8 +1214,8 @@ app.post('/api/admins', adminAuth, (req, res) => {
     return res.status(400).json({ error: 'Missing username or password' });
   }
   const roleNormalized = (role && typeof role === 'string') ? role.toLowerCase() : 'admin';
-  if (!ROLES.includes(roleNormalized) || roleNormalized === 'owner') {
-    // Prevent creation of new owners via API
+  if (!ROLES.includes(roleNormalized) || roleNormalized === 'superadmin') {
+    // Prevent creation of new superadmins via API
     return res.status(400).json({ error: 'Invalid role' });
   }
   if (admins.find(a => a.username === username)) {
@@ -1216,20 +1229,19 @@ app.post('/api/admins', adminAuth, (req, res) => {
 });
 
 app.delete('/api/admins/:id', adminAuth, (req, res) => {
-  // Only owners can delete admins
-  if (!['owner','superadmin'].includes(req.adminRole)) {
+  // Only superadmins can delete admins
+  if (!['superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
   const index = admins.findIndex(a => a.id === id);
   if (index >= 0) {
-    // Prevent removal of the last owner
+    // Prevent removal of the last superadmin
     const adminToRemove = admins[index];
-    if (adminToRemove.role === 'owner') {
-      // Count number of owners
-      const ownerCount = admins.reduce((acc, a) => acc + (a.role === 'owner' ? 1 : 0), 0);
-      if (ownerCount <= 1) {
-        return res.status(400).json({ error: 'Cannot delete the only owner' });
+    if (adminToRemove.role === 'superadmin') {
+      const superCount = admins.reduce((acc, a) => acc + (a.role === 'superadmin' ? 1 : 0), 0);
+      if (superCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the only superadmin' });
       }
     }
     admins.splice(index, 1);
@@ -1361,8 +1373,8 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
 // user email and includes counts of bookings by day of the week as well as
 // total hours spent checked in vs not checked in.
 app.get('/api/analytics', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can access analytics
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only superadmins, admins and analysts can access analytics
+  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   // Determine date range from query parameters
@@ -1502,8 +1514,8 @@ app.get('/api/analytics', adminAuth, (req, res) => {
 // monthly check‑in hours, monthly no‑show hours and overall utilisation
 // percentage (booked hours vs total available hours for all offices).
 app.get('/api/analytics-summary', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can access summary
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only superadmins, admins and analysts can access summary
+  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
@@ -1630,8 +1642,8 @@ app.get('/api/analytics-summary', adminAuth, (req, res) => {
 // hours, check‑in count and no‑check‑in count.  Returned as a text/csv
 // attachment.
 app.get('/api/analytics-export', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can export analytics
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only superadmins, admins and analysts can export analytics
+  if (!['superadmin','admin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
@@ -1741,9 +1753,9 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
 // devices and codes. Because codes effectively authenticate kiosk
 // devices, they should be treated as secrets and only visible to admins.
 app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
-  // Permit superadmins to manage kiosk tokens as well.  Previously superadmins
-  // were excluded which prevented them from viewing tokens in the settings UI.
-  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
+  // Permit superadmins to manage kiosk tokens.  Only superadmins and admins
+  // can view kiosk tokens in the settings UI.
+  if (!['superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   res.json(kioskTokens);
@@ -1754,8 +1766,8 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // the kiosk device, while the code is shared with the device during
 // setup. The token remains valid until explicitly revoked by an admin.
 app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
-  // Allow superadmins to generate kiosk tokens in addition to owners and admins.
-  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
+  // Allow superadmins to generate kiosk tokens in addition to admins.
+  if (!['superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const id = uuidv4();
@@ -1770,9 +1782,9 @@ app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
 // does not remove the cookie from the client; instead the server simply
 // stops recognising the token.
 app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
-  // Allow superadmins to revoke kiosk tokens.  Without this, superadmins
-  // could not perform deletions in the admin settings page.
-  if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
+  // Allow superadmins to revoke kiosk tokens.  Only superadmins and admins
+  // may delete kiosk tokens via the admin settings page.
+  if (!['superadmin', 'admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { id } = req.params;
