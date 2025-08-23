@@ -787,13 +787,18 @@ function adminAuth(req, res, next) {
   // allowed both 'super' and 'superadmin' to denote a top‑level admin. We
   // normalize these to 'superadmin' instead of converting them to 'owner'
   // so that the role returned to the client reflects the original intent.
+  // Normalise the admin role for permission checks. Trim and lower‑case
+  // the stored value to handle inconsistent capitalisation or extra
+  // whitespace. Map legacy roles 'owner' and 'super' to 'superadmin'
+  // so older accounts continue to have full privileges. All other
+  // roles are preserved as lower‑case.
   let role = admin && admin.role ? String(admin.role) : 'admin';
   if (typeof role === 'string') {
-    const r = role.toLowerCase();
-    // Normalise roles: treat "super", "superadmin" and legacy "owner"
-    // as unified superadmin to avoid locking out older accounts.
+    const r = role.trim().toLowerCase();
     if (r === 'super' || r === 'superadmin' || r === 'owner') {
       role = 'superadmin';
+    } else {
+      role = r;
     }
   }
   req.adminRole = role;
@@ -845,14 +850,17 @@ app.post('/api/login', async (req, res) => {
     }
     const token = uuidv4();
     tokens[token] = admin.id;
-    // Normalize role sent to the client. Default to 'admin'. For backward
-    // compatibility treat both 'super' and 'superadmin' as 'superadmin'.
+    // Normalise the role returned to the client. Trim and lower‑case the stored
+    // value to handle inconsistent capitalisation and whitespace. Map legacy
+    // roles 'owner' and 'super' to the unified 'superadmin'. All other roles
+    // are preserved as lower‑case so the client sees a normalised role name.
     let outRole = admin.role || 'admin';
     if (typeof outRole === 'string') {
-      const rr = outRole.toLowerCase();
-      // Normalise role for backward compatibility: treat "owner" as "superadmin"
+      const rr = outRole.trim().toLowerCase();
       if (rr === 'super' || rr === 'superadmin' || rr === 'owner') {
         outRole = 'superadmin';
+      } else {
+        outRole = rr;
       }
     }
     return res.json({ token, role: outRole });

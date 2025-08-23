@@ -809,14 +809,20 @@ function adminAuth(req, res, next) {
   // allowed both 'super' and 'superadmin' to denote a top‑level admin. We
   // normalize these to 'superadmin' instead of converting them to 'owner'
   // so that the role returned to the client reflects the original intent.
+  // Normalise the admin role for permission checks. Start with the stored
+  // role (if any) defaulting to "admin". Roles may have inconsistent
+  // capitalisation or whitespace; trim and lower‑case the string before
+  // applying legacy mappings.  Treat "owner" and "super" as synonyms for
+  // the new unified "superadmin" role.  All other roles are preserved as
+  // lower‑case.  This prevents trailing spaces from breaking access
+  // control and ensures backwards compatibility.
   let role = admin && admin.role ? String(admin.role) : 'admin';
   if (typeof role === 'string') {
-    const r = role.toLowerCase();
-    // Treat legacy roles "super", "superadmin" and "owner" as the new
-    // unified superadmin role. Without this, admins with the old
-    // "owner" role would be locked out of privileged endpoints.
+    const r = role.trim().toLowerCase();
     if (r === 'super' || r === 'superadmin' || r === 'owner') {
       role = 'superadmin';
+    } else {
+      role = r;
     }
   }
   req.adminRole = role;
@@ -868,15 +874,18 @@ app.post('/api/login', async (req, res) => {
     }
     const token = uuidv4();
     tokens[token] = admin.id;
-    // Normalize role sent to the client. Default to 'admin'. For backward
-    // compatibility treat both 'super' and 'superadmin' as 'superadmin'.
+    // Normalise the role returned to the client. Default to 'admin'.  Trim
+    // whitespace and lower‑case the value to handle inconsistent
+    // capitalisation.  Map legacy roles 'owner' and 'super' to the
+    // unified 'superadmin' role so existing accounts retain full
+    // privileges.
     let outRole = admin.role || 'admin';
     if (typeof outRole === 'string') {
-      const rr = outRole.toLowerCase();
-      // Normalise old role names. Treat "owner" as "superadmin" for
-      // backwards compatibility so existing accounts retain full access.
+      const rr = outRole.trim().toLowerCase();
       if (rr === 'super' || rr === 'superadmin' || rr === 'owner') {
         outRole = 'superadmin';
+      } else {
+        outRole = rr;
       }
     }
     return res.json({ token, role: outRole });
