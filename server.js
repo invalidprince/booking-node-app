@@ -996,7 +996,22 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
 });
 
 // Bookings endpoints
-app.get('/api/bookings', adminAuth, (req, res) => {
+// Return bookings from the data store.  To ensure the admin portal always
+// reflects the latest data, re‑load bookings from the database on each
+// request when a DB connection is available.  This avoids stale in‑memory
+// state when bookings are created by other clients or processes.
+app.get('/api/bookings', adminAuth, async (req, res) => {
+  // Refresh in‑memory data from the database if possible.  Failure to
+  // load does not prevent responding with the existing state.  Because
+  // loadData() also updates spaces and admins we invoke it sparingly.
+  if (db) {
+    try {
+      await loadData();
+    } catch (err) {
+      console.error('Failed to refresh data for bookings list', err);
+      // proceed with existing in‑memory data on error
+    }
+  }
   // Only owners and admins can list all bookings
   if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
