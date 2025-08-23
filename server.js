@@ -1195,6 +1195,18 @@ app.post('/api/bookings', async (req, res) => {
   } catch (err) {
     console.error('Error saving new booking', err);
   }
+  // After saving, reload the in‑memory state from the database (if
+  // configured).  This ensures that a subsequent call to list
+  // bookings reflects the most up‑to‑date data, avoiding a race
+  // condition where the new booking may not yet appear.  Errors
+  // during reload are logged but not fatal.
+  if (db) {
+    try {
+      await loadData();
+    } catch (err) {
+      console.error('Error reloading data after booking', err);
+    }
+  }
   // Send booking confirmation email asynchronously.  Construct a cancel URL
   // using either APP_BASE_URL (when set) or the current request's host.  The
   // confirmation includes basic booking details and a cancel link.
