@@ -116,7 +116,10 @@
       const right = document.getElementById('rightActions');
       if (!right) return;
       right.innerHTML = '';
-      const role = localStorage.getItem('adminRole') || 'admin';
+      // Normalise the role to lowercase for comparison.  Roles may be
+      // stored with inconsistent casing (e.g. "SuperAdmin") which would
+      // otherwise fail the equality check.
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       if (!true && role === 'superadmin'){
         const a = document.createElement('a');
         a.href = '/admin-settings.html';
@@ -141,7 +144,7 @@
       const right = document.getElementById('rightActions');
       if (!right) return;
       right.innerHTML = '';
-      const role = localStorage.getItem('adminRole') || 'admin';
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       if (!true && role === 'superadmin'){
         const a = document.createElement('a');
         a.href = '/admin-settings.html';
@@ -197,8 +200,14 @@
         if (res.ok && data && data.token) {
           token = data.token;
           localStorage.setItem('adminToken', token);
-          if (data && data.role) localStorage.setItem('adminRole', data.role);
-          if (data && data.role) localStorage.setItem('adminRole', data.role);
+          if (data && data.role) {
+            // Store the role in lowercase so that later comparisons (e.g. when
+            // checking for superadmin) are case insensitive.  Without this,
+            // roles like "SuperAdmin" would not match the expected values
+            // in updateSettingsLinkIfNeeded().
+            const roleLower = String(data.role).toLowerCase();
+            localStorage.setItem('adminRole', roleLower);
+          }
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
           updateSettingsLinkIfNeeded();
@@ -728,7 +737,9 @@
       const blob = new Blob([text], { type: 'text/csv' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'analytics.csv';
+      // Use a descriptive filename reflecting bookings export. The server
+      // returns the file as bookings.csv.
+      link.download = 'bookings.csv';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
