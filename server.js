@@ -1464,8 +1464,9 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
 // user email and includes counts of bookings by day of the week as well as
 // total hours spent checked in vs not checked in.
 app.get('/api/analytics', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can access analytics
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins, superadmins and analysts can access analytics
+  // Permit superadmins as they have full administrative privileges.
+  if (!['owner','admin','superadmin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   // Determine date range from query parameters
@@ -1605,8 +1606,8 @@ app.get('/api/analytics', adminAuth, (req, res) => {
 // monthly check‑in hours, monthly no‑show hours and overall utilisation
 // percentage (booked hours vs total available hours for all offices).
 app.get('/api/analytics-summary', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can access summary
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins, superadmins and analysts can access summary
+  if (!['owner','admin','superadmin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
@@ -1733,8 +1734,9 @@ app.get('/api/analytics-summary', adminAuth, (req, res) => {
 // hours, check‑in count and no‑check‑in count.  Returned as a text/csv
 // attachment.
 app.get('/api/analytics-export', adminAuth, (req, res) => {
-  // Only owners, admins and analysts can export analytics
-  if (!['owner','admin','analyst'].includes(req.adminRole)) {
+  // Only owners, admins, superadmins and analysts can export bookings
+  // Permit superadmins as they can access all data.
+  if (!['owner','admin','superadmin','analyst'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const { period, start, end } = req.query;
