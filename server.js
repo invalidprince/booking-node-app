@@ -1817,16 +1817,32 @@ app.get('/api/kiosk/tokens', adminAuth, (req, res) => {
 // returns a newly generated id and code. The id is stored in cookies on
 // the kiosk device, while the code is shared with the device during
 // setup. The token remains valid until explicitly revoked by an admin.
-app.post('/api/kiosk/tokens', adminAuth, (req, res) => {
+app.post('/api/kiosk/tokens', adminAuth, async (req, res) => {
   // Allow superadmins to generate kiosk tokens in addition to owners and admins.
   if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
-  const id = uuidv4();
-  const code = generateKioskCode();
-  kioskTokens.push({ id, code });
-  saveData();
-  res.json({ id, code });
+  try {
+    const id = uuidv4();
+    const code = generateKioskCode();
+    kioskTokens.push({ id, code });
+    // Persist new token to storage. Await to catch any potential errors from
+    // asynchronous database or filesystem writes. If persistence fails we
+    // remove the token from memory so it doesn’t exist without being saved.
+    try {
+      await saveData();
+    } catch (persistErr) {
+      console.error('Failed to persist kiosk token:', persistErr);
+      // Remove the just-added token to avoid unsaved state
+      const idx = kioskTokens.findIndex(t => t.id === id);
+      if (idx >= 0) kioskTokens.splice(idx, 1);
+      return res.status(500).json({ error: 'Failed to save token' });
+    }
+    return res.json({ id, code });
+  } catch (err) {
+    console.error('Error generating kiosk token', err);
+    return res.status(500).json({ error: 'Failed to generate token' });
+  }
 });
 
 // Revoke an existing kiosk token by its id (admin only). If the token is
