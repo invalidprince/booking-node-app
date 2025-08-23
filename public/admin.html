@@ -35,6 +35,9 @@
       <!-- Prevent accidental form-submit reloads -->
       <button id="loginBtn" type="button">Login</button>
     </div>
+    <div style="margin-top:8px;">
+      <a id="forgotPasswordLink" href="#" style="font-size:14px; color:#0066cc; text-decoration:underline;">Forgot password?</a>
+    </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
   <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
@@ -200,6 +203,45 @@
       }
       // Navigate back to the main page
       window.location.href = 'index.html';
+    }
+
+    // Initiate a password reset request.  This handler reads the value
+    // from the username input, submits a POST to the forgot-password API
+    // and displays a generic success or error message to the user.  A
+    // meaningful response is always shown without revealing whether the
+    // account actually exists.
+    async function forgotPassword(evt) {
+      if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+      const statusEl = document.getElementById('loginStatus');
+      if (statusEl) {
+        statusEl.style.color = '#b00';
+        statusEl.textContent = '';
+      }
+      const email = document.getElementById('username') && document.getElementById('username').value.trim();
+      if (!email) {
+        if (statusEl) statusEl.textContent = 'Please enter your email in the username field.';
+        return;
+      }
+      try {
+        const res = await fetch('/api/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: email })
+        });
+        if (res.ok) {
+          if (statusEl) {
+            statusEl.style.color = '#090';
+            statusEl.textContent = 'If an account exists for this email, a reset link has been sent.';
+          }
+        } else {
+          let data = {};
+          try { data = await res.clone().json(); } catch (_) {}
+          if (statusEl) statusEl.textContent = (data && data.error) || 'Unable to request password reset.';
+        }
+      } catch (e) {
+        console.error('Forgot password error', e);
+        if (statusEl) statusEl.textContent = 'Error requesting password reset.';
+      }
     }
 
     // Accept an optional event parameter so that we can prevent default behaviour.
@@ -878,6 +920,8 @@
         on('loadAnalyticsBtn','click', loadAnalytics);
         on('loadSummaryBtn','click', loadSummary);
         on('downloadCsvBtn','click', downloadCsv);
+        // Bind forgot password link
+        on('forgotPasswordLink','click', forgotPassword);
       })();
 
       updateSettingsLinkIfNeeded();
@@ -891,6 +935,9 @@
       on('loadAnalyticsBtn','click', loadAnalytics);
       on('loadSummaryBtn','click', loadSummary);
       on('downloadCsvBtn','click', downloadCsv);
+
+      // Bind forgot password link on the duplicate binding as well
+      on('forgotPasswordLink','click', forgotPassword);
 
       // Global error banner
       window.addEventListener('error', (e) => {
