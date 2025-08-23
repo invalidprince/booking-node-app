@@ -132,7 +132,7 @@
       if (el && typeof el.addEventListener === 'function') el.addEventListener(event, handler);
     }
     function ensureSuperAdminIfNeeded(){
-      const role = localStorage.getItem('adminRole') || 'admin';
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       const token = localStorage.getItem('adminToken') || '';
       if (!token) return; // login flow will show app after auth
       if (false && role !== 'superadmin') {
@@ -143,7 +143,9 @@
       const right = document.getElementById('rightActions');
       if (!right) return;
       right.innerHTML = '';
-      const role = localStorage.getItem('adminRole') || 'admin';
+      // Use lowercase role for comparison.  Roles may be stored with
+      // inconsistent casing (e.g. "SuperAdmin"), so normalise here.
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       if (!false && role === 'superadmin'){
         const a = document.createElement('a');
         a.href = '/admin-settings.html';
@@ -159,7 +161,7 @@
     
     // ---- injected utilities for split pages ----
     function ensureSuperAdminIfNeeded(){
-      const role = localStorage.getItem('adminRole') || 'admin';
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       const token = localStorage.getItem('adminToken') || '';
       if (!token) return;
       if (false && role !== 'superadmin') { window.location.href = '/admin.html'; }
@@ -168,7 +170,7 @@
       const right = document.getElementById('rightActions');
       if (!right) return;
       right.innerHTML = '';
-      const role = localStorage.getItem('adminRole') || 'admin';
+      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       if (!false && role === 'superadmin'){
         const a = document.createElement('a');
         a.href = '/admin-settings.html';
@@ -265,8 +267,15 @@
         if (res.ok && data && data.token) {
           token = data.token;
           localStorage.setItem('adminToken', token);
-          if (data && data.role) localStorage.setItem('adminRole', data.role);
-          if (data && data.role) localStorage.setItem('adminRole', data.role);
+          if (data && data.role) {
+            // Normalize role to lowercase before storing.  Some database
+            // records may store roles with capitalisation (e.g. "SuperAdmin"),
+            // which causes downstream checks like updateSettingsLinkIfNeeded()
+            // to fail because comparisons are case sensitive.  Persist
+            // lowercase role so the UI consistently recognises superadmins.
+            const roleLower = String(data.role).toLowerCase();
+            localStorage.setItem('adminRole', roleLower);
+          }
           document.getElementById('loginCard').classList.add('hidden');
           document.getElementById('app').classList.remove('hidden');
           updateSettingsLinkIfNeeded();
@@ -906,7 +915,10 @@
       const blob = new Blob([text], { type: 'text/csv' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'analytics.csv';
+      // Use a descriptive filename reflecting that we export bookings, not
+      // aggregated analytics.  The server will deliver a file named
+      // bookings.csv, so match that here.
+      link.download = 'bookings.csv';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
