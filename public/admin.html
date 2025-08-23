@@ -669,6 +669,10 @@
         if (res.ok) {
           // Reset to the first page so the newly added booking appears at the top
           if (window._pageState) window._pageState.offset = 0;
+          // Wait a short moment before reloading bookings.  Without a delay the
+          // newly created booking may not yet be visible because the server
+          // persists data asynchronously and reloads the in‑memory state.
+          await new Promise(resolve => setTimeout(resolve, 200));
           await loadBookings();
           // optional: clear inputs
           // document.getElementById('bName').value = '';
