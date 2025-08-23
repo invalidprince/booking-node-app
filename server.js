@@ -1109,7 +1109,12 @@ app.get('/api/bookings', adminAuth, async (req, res) => {
  *   - nth: integer (1‑5) and weekday: integer (0‑6) representing the
  *     nth occurrence of weekday in the month.
  */
-app.post('/api/bookings', (req, res) => {
+// Create a new booking.  This handler is asynchronous so we can await
+// persistence operations.  Without awaiting saveData(), the response could
+// return before the new booking is committed to the database, causing
+// subsequent fetches to miss the just‑created booking.  Awaiting the save
+// ensures that the booking list remains consistent for the admin UI.
+app.post('/api/bookings', async (req, res) => {
   const { name, email, spaceId, date, startTime, endTime, recurring } = req.body;
   if (!name || !email || !spaceId || !date || !startTime || !endTime) {
     return res.status(400).json({ error: 'Missing fields' });
@@ -1181,8 +1186,15 @@ app.post('/api/bookings', (req, res) => {
     checkedIn: false
   };
   bookings.push(booking);
-  // Persist changes
-  saveData();
+  // Persist changes.  Await the promise so that the booking is fully
+  // committed to the database (or JSON file) before responding.  If
+  // persistence fails we log the error but still proceed so the booking
+  // exists in memory and the client receives a response.
+  try {
+    await saveData();
+  } catch (err) {
+    console.error('Error saving new booking', err);
+  }
   // Send booking confirmation email asynchronously.  Construct a cancel URL
   // using either APP_BASE_URL (when set) or the current request's host.  The
   // confirmation includes basic booking details and a cancel link.
