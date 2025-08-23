@@ -578,11 +578,24 @@
       // database contained historical bookings.  Removing the upcoming
       // filter allows the full set of bookings (subject to pagination) to
       // be displayed.
-      return fetch(`/api/bookings?sort=asc&limit=${limit}&offset=${offset}`, setAuthHeaders())
+      // Fetch all bookings from the server.  We intentionally omit pagination
+      // parameters here so the server returns the full list instead of a
+      // paginated subset.  This ensures the admin UI always reflects the
+      // complete bookings table.  Sorting is applied client‑side below.
+      return fetch('/api/bookings', setAuthHeaders())
         .then(r => r.json())
         .then(data => {
+          // When no query parameters are provided the server returns an array of
+          // bookings.  If query parameters are added in future this code still
+          // supports the `{ items, total }` shape.
           const items = Array.isArray(data) ? data : (data.items || []);
-          const total = Array.isArray(data) ? items.length : (data.total || items.length);
+          // Sort ascending by date then startTime to mirror server behaviour.
+          items.sort((a, b) => {
+            const cmpDate = (a.date || '').localeCompare(b.date || '');
+            if (cmpDate !== 0) return cmpDate;
+            return (a.startTime || '').localeCompare(b.startTime || '');
+          });
+          const total = items.length;
           window._pageState.total = total;
 
           const tbody = document.querySelector('#bookingsTable tbody');
@@ -593,10 +606,6 @@
             const end12 = to12Hour(b.endTime);
             const dateFormatted = formatDateWithDay(b.date);
             const recurrenceDesc = formatRecurrence(b.recurrence);
-            // Render the booking row with separate start and end time columns and a dedicated
-            // Action column for the cancel button.  Previously the start and end times were
-            // combined into a single cell and the cancel button leaked into the Recurring
-            // column, which caused the layout issues the user reported.
             tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
               `<td>${dateFormatted}</td>` +
               `<td>${start12}</td>` +
@@ -606,14 +615,14 @@
             tbody.appendChild(tr);
           });
 
-          // Update page info
-          const start = total === 0 ? 0 : (offset + 1);
-          const end = Math.min(offset + items.length, total);
+          // Since we render all bookings, the page info covers the full range.
+          const start = total === 0 ? 0 : 1;
+          const end = total;
           document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
 
-          // Enable/disable buttons
-          document.getElementById('prevPageBtn').disabled = offset === 0;
-          document.getElementById('nextPageBtn').disabled = end >= total;
+          // Disable pagination controls since all items are shown on one page.
+          document.getElementById('prevPageBtn').disabled = true;
+          document.getElementById('nextPageBtn').disabled = true;
         });
     }
 
