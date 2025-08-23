@@ -292,6 +292,93 @@ async function saveData() {
 }
 
 /**
+ * Load persisted state into the in‑memory arrays. When the application is
+ * configured with a DATABASE_URL and a Postgres connection is available
+ * this function will query each table and replace the contents of the
+ * corresponding in‑memory collections. When no database is configured it
+ * falls back to loading from the JSON data file on disk. Missing files
+ * are ignored and leave the default values intact. Any errors are logged
+ * but will not prevent the server from starting.
+ */
+async function loadData() {
+  // If a database connection exists, prefer loading from the database.
+  if (db) {
+    try {
+      // Load spaces from the database
+      const spaceRes = await db.query('SELECT id, name, type, "priorityOrder" FROM spaces');
+      // Replace contents of spaces array while preserving its identity
+      spaces.splice(0, spaces.length, ...spaceRes.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        priorityOrder: r.priorityOrder
+      })));
+      // Load bookings from the database
+      const bookingRes = await db.query('SELECT id, name, email, "spaceId", date, "startTime", "endTime", recurring, "checkInTime", "checkOutTime", cancelled FROM bookings');
+      bookings.splice(0, bookings.length, ...bookingRes.rows.map(r => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        spaceId: r.spaceId,
+        date: r.date,
+        startTime: r.startTime,
+        endTime: r.endTime,
+        recurring: r.recurring || null,
+        checkInTime: r.checkInTime || null,
+        checkOutTime: r.checkOutTime || null,
+        cancelled: r.cancelled || false
+      })));
+      // Load admins from the database
+      const adminRes = await db.query('SELECT id, username, "passwordHash", salt, role FROM admins');
+      admins.splice(0, admins.length, ...adminRes.rows.map(r => ({
+        id: r.id,
+        username: r.username,
+        passwordHash: r.passwordHash,
+        salt: r.salt,
+        role: r.role
+      })));
+      // Load verified emails from the database
+      const verifiedRes = await db.query('SELECT email FROM "verifiedEmails"');
+      verifiedEmails.splice(0, verifiedEmails.length, ...verifiedRes.rows.map(r => r.email));
+      // Load kiosk tokens from the database
+      const tokenRes = await db.query('SELECT id, code FROM "kioskTokens"');
+      kioskTokens.splice(0, kioskTokens.length, ...tokenRes.rows.map(r => ({
+        id: r.id,
+        code: r.code
+      })));
+      return;
+    } catch (err) {
+      console.error('Failed to load data from database:', err);
+      // fall through to file-based loading on error
+    }
+  }
+  // Fall back to loading from the JSON data file on disk
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      const data = JSON.parse(raw);
+      if (data.spaces && Array.isArray(data.spaces)) {
+        spaces.splice(0, spaces.length, ...data.spaces);
+      }
+      if (data.bookings && Array.isArray(data.bookings)) {
+        bookings.splice(0, bookings.length, ...data.bookings);
+      }
+      if (data.admins && Array.isArray(data.admins)) {
+        admins.splice(0, admins.length, ...data.admins);
+      }
+      if (data.verifiedEmails && Array.isArray(data.verifiedEmails)) {
+        verifiedEmails.splice(0, verifiedEmails.length, ...data.verifiedEmails);
+      }
+      if (data.kioskTokens && Array.isArray(data.kioskTokens)) {
+        kioskTokens.splice(0, kioskTokens.length, ...data.kioskTokens);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load data from JSON file:', err);
+  }
+}
+
+/**
  * Write a timestamped backup of the current data payload.  The backup file
  * name includes the current date and time down to seconds.  Only the most
  * recent BACKUP_RETENTION backups are kept on disk; older backups are
