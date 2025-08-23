@@ -504,7 +504,11 @@ const kioskSessions = {};
 // perform most actions except managing other admins, analysts can view
 // analytics but not modify data, and frontdesk users have limited booking
 // capabilities (e.g. check-in).  You can adjust this list as needed.
-const ROLES = ['owner', 'admin', 'analyst', 'frontdesk'];
+// Define the available admin roles.  Owners have full privileges, superadmins
+// have the same access as owners but are treated distinctly for display and
+// selection in the UI, admins have day‑to‑day management access, analysts
+// can view analytics, and frontdesk users have limited booking visibility.
+const ROLES = ['owner', 'superadmin', 'admin', 'analyst', 'frontdesk'];
 
 /**
  * Hash a plain text password using PBKDF2 with a random salt.  Returns an
@@ -801,12 +805,17 @@ function adminAuth(req, res, next) {
   // explicitly check for 'owner', 'admin' or 'analyst').  When an admin has
   // one of these legacy roles we treat them as an owner.  Otherwise fall
   // back to the stored role or 'admin' by default.
-  let role = admin && admin.role ? admin.role : 'admin';
-  if (role && typeof role === 'string') {
-    const r = role.toLowerCase();
-    if (r === 'super' || r === 'superadmin') role = 'owner';
-    else role = role; // leave unchanged
+  // Normalise the stored role to a lowercase string.  Historically some
+  // installations used a "super" or "superadmin" role.  We preserve
+  // superadmin as its own role instead of mapping it to owner so that
+  // tokens and UI display remain consistent with the database.  Only the
+  // legacy "super" alias maps to owner.  Unknown roles default to
+  // 'admin'.
+  let role = admin && admin.role ? String(admin.role).toLowerCase() : 'admin';
+  if (role === 'super') {
+    role = 'owner';
   }
+  // Set the computed role on the request for downstream access control
   req.adminRole = role;
   next();
 }
