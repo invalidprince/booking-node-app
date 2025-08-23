@@ -589,11 +589,22 @@
           // bookings.  If query parameters are added in future this code still
           // supports the `{ items, total }` shape.
           const items = Array.isArray(data) ? data : (data.items || []);
-          // Sort ascending by date then startTime to mirror server behaviour.
+          // Sort bookings in reverse chronological order so that newly
+          // created bookings appear at the top of the table.  When
+          // comparing dates we reverse the usual ascending order by
+          // swapping the operands of localeCompare; for start times we
+          // likewise compare in descending order.  This ensures that
+          // upcoming bookings are shown first and administrators can see
+          // their most recent entries without having to scroll to the
+          // bottom of the list.
           items.sort((a, b) => {
-            const cmpDate = (a.date || '').localeCompare(b.date || '');
+            const dateA = a.date || '';
+            const dateB = b.date || '';
+            const cmpDate = dateB.localeCompare(dateA);
             if (cmpDate !== 0) return cmpDate;
-            return (a.startTime || '').localeCompare(b.startTime || '');
+            const startA = a.startTime || '';
+            const startB = b.startTime || '';
+            return (startB || '').localeCompare(startA || '');
           });
           const total = items.length;
           window._pageState.total = total;
