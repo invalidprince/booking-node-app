@@ -411,17 +411,6 @@ const kioskSessions = {};
 // capabilities (e.g. check-in).  You can adjust this list as needed.
 const ROLES = ['owner', 'admin', 'analyst', 'frontdesk'];
 
-// ---------------------------------------------------------------------------
-// Password reset support
-//
-// Maintain an in‑memory mapping of password reset tokens to admin identifiers
-// along with an expiration timestamp. Tokens are generated on demand when
-// admins request a password reset and are valid for a limited time (one hour
-// by default). These mappings are not persisted to disk; they exist only for
-// the lifetime of the server process. When a valid token is used to reset
-// a password the corresponding entry is removed from this object.
-const passwordResetTokens = {};
-
 /**
  * Hash a plain text password using PBKDF2 with a random salt.  Returns an
  * object containing the salt and derived key in hexadecimal format.  Using
@@ -1820,111 +1809,6 @@ app.post('/api/bootstrap-admin', async (req, res) => {
 
 
 // ---- Test email endpoint ----
-// ---------------------------------------------------------------------------
-// Password reset endpoints
-//
-// Request a password reset. Accepts { email } in the body and, when the email
-// corresponds to a registered admin user, issues a reset token and emails a
-// link to the user. The response is always 200 OK to avoid leaking which
-// accounts exist.
-app.post('/api/request-password-reset', async (req, res) => {
-  try {
-    const { email } = req.body || {};
-    if (!email) {
-      return res.status(400).json({ error: 'Email is required' });
-    }
-    const emailNormalized = String(email).trim().toLowerCase();
-    // Find an admin record whose username matches the provided email. The
-    // login form uses email addresses as usernames, so we compare against
-    // admin.username in a case‑insensitive manner.
-    const admin = admins.find(a => a.username && a.username.toLowerCase() === emailNormalized);
-    // Generate a reset token regardless of whether the user exists. This
-    // prevents enumeration of valid usernames. Only send email when an admin
-    // exists.
-    const token = uuidv4();
-    if (admin) {
-      const expires = Date.now() + 60 * 60 * 1000; // valid for 1 hour
-      passwordResetTokens[token] = { id: admin.id, expires };
-      // Build the absolute link to the password reset page. Prefer the
-      // configured APP_BASE_URL when set; otherwise derive from the current
-      // request. The front‑end page is located at /new-password.html and
-      // accepts a token query parameter.
-      let baseUrl;
-      if (APP_BASE_URL) {
-        baseUrl = APP_BASE_URL;
-      } else {
-        baseUrl = `${req.protocol}://${req.get('host')}`;
-      }
-      const link = `${baseUrl}/new-password.html?token=${token}`;
-      const text =
-        `You have requested a password reset for your admin account.\n\n` +
-        `Please click the link below to set a new password. This link is valid for one hour.\n\n` +
-        `${link}\n\n` +
-        `If you did not request this password reset, you can safely ignore this email.`;
-      // Send the email asynchronously; errors are logged but not returned to the client.
-      sendEmail(emailNormalized, 'Admin Password Reset', text).catch(err => {
-        console.error('Failed to send password reset email:', err && (err.stack || err.message || err));
-      });
-    }
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error('Error handling password reset request:', err);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
-
-/**
- * Reset an admin password using a token. Accepts { token, password } in the body.
- * Verifies the token exists and has not expired, then updates the corresponding
- * admin record with a new hashed password. The token is removed after use.
- */
-app.post('/api/reset-password', async (req, res) => {
-  try {
-    const { token, password } = req.body || {};
-    if (!token || !password) {
-      return res.status(400).json({ error: 'Missing token or password' });
-    }
-    const entry = passwordResetTokens[token];
-    if (!entry || typeof entry !== 'object') {
-      return res.status(400).json({ error: 'Invalid or expired token' });
-    }
-    if (Date.now() > entry.expires) {
-      delete passwordResetTokens[token];
-      return res.status(400).json({ error: 'Invalid or expired token' });
-    }
-    const adminId = entry.id;
-    const admin = admins.find(a => a.id === adminId);
-    if (!admin) {
-      delete passwordResetTokens[token];
-      return res.status(400).json({ error: 'Invalid or expired token' });
-    }
-    // Hash the new password
-    const { hash, salt } = hashPassword(String(password));
-    admin.passwordHash = hash;
-    admin.salt = salt;
-    // Remove any legacy plain password field
-    if (admin.password) {
-      delete admin.password;
-    }
-    // Persist to database if using Postgres
-    if (db) {
-      try {
-        await db.query('UPDATE admins SET "passwordHash" = $1, salt = $2 WHERE id = $3', [hash, salt, adminId]);
-      } catch (err) {
-        console.error('Failed to update admin password in database:', err);
-        return res.status(500).json({ error: 'Internal error' });
-      }
-    }
-    // Persist to JSON and remove token
-    delete passwordResetTokens[token];
-    saveData();
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error('Error resetting password:', err);
-    return res.status(500).json({ error: 'Internal error' });
-  }
-});
-
 app.get('/api/test-email', async (req, res) => {
   const expected = process.env.TEST_EMAIL_KEY;
   if (expected && req.query.key !== expected) return res.status(403).json({ ok: false, error: 'forbidden' });
