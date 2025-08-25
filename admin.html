@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+OCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -685,15 +685,17 @@
           // persists data asynchronously and reloads the in‑memory state.
           await new Promise(resolve => setTimeout(resolve, 200));
           await loadBookings();
-          // optional: clear inputs
-          // document.getElementById('bName').value = '';
-          // document.getElementById('bEmail').value = '';
-          // document.getElementById('bStart').value = '';
-          // document.getElementById('bEnd').value = '';
-        } else {
-          const err = await res.json().catch(() => ({ error: 'Booking failed' }));
-          alert(err.error || 'Booking failed');
-        }
+          
+        // clear inputs and show confirmation
+          lert('Booking added successfully');
+         document.getElementById('bName').value = '';
+          ocument.getElementById('bEmail').value = '';
+
+         document.getElementById('bDate').value = '';
+        document.getElementById('bStart').value = '';
+      document.getElementById('bEnd').value = '';
+      document.getElementById('bSpace').value = '';
+
       } catch (e) {
         console.error(e);
         alert('Booking failed');
@@ -1052,7 +1054,10 @@
         const el = document.getElementById('bookingsTable');
         if (el) {
           el.addEventListener('click', (e) => {
-            if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id);
+      ////       if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id);
+                      // Use closest to handle nested elements
+                const btn = e.target.closest('.delBooking');
+                if (btn) deleteBooking(btn.dataset.id);
           });
         }
       }
