@@ -1252,20 +1252,46 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
 });
 
 // Public cancellation link. Allows a user to cancel their own booking via a unique URL.
-// When accessed, this removes the booking from the system, sends a cancellation email
-// and returns a simple HTML response indicating the result.
-app.get('/cancel/:id', (req, res) => {
+// When accessed, this removes the booking from the system, persists the change,
+// sends a cancellation email and returns a simple HTML response indicating the result.
+app.get('/cancel/:id', async (req, res) => {
   const { id } = req.params;
   const index = bookings.findIndex(b => b.id === id);
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
-    res.status(404).send(
-      '<html><head><title>Booking Not Found</title></head><body>' +
-      '<h1>Booking Not Found</h1>' +
-      '<p>The booking you are trying to cancel does not exist.</p>' +
+    // Persist booking removal to storage
+    try {
+      await saveData();
+    } catch (err) {
+      console.error('Failed to save data after cancellation:', err);
+    }
+    // Send a cancellation email to the user.  Include basic booking details.
+    try {
+      const spaceName = spaces.find(s => s.id === removed.spaceId)?.name || removed.spaceId;
+      const subject = 'Booking Cancelled';
+      const body =
+        `Hello ${removed.name},\n\n` +
+        `Your booking for ${spaceName} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.\n\n` +
+        `Thank you.`;
+      await sendEmail(removed.email, subject, body);
+    } catch (err) {
+      console.error('Error sending cancellation email', err);
+    }
+    // Respond with a simple confirmation page
+    return res.send(
+      '<html><head><title>Booking Cancelled</title></head><body>' +
+      '<h1>Booking Cancelled</h1>' +
+      '<p>Your booking has been successfully cancelled.</p>' +
       '</body></html>'
     );
   }
+  // If the booking does not exist, respond with a not found page
+  return res.status(404).send(
+    '<html><head><title>Booking Not Found</title></head><body>' +
+    '<h1>Booking Not Found</h1>' +
+    '<p>The booking you are trying to cancel does not exist.</p>' +
+    '</body></html>'
+  );
 });
 
 // Availability: returns spaces that are free for a given date/time range.
