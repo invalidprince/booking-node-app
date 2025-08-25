@@ -55,6 +55,7 @@
   <div class="link-bar" style="text-align: right;">
     <!-- Link to Admin portal on top right -->
     <a href="admin.html" id="adminLink">Admin Portal</a>
+            <a href="#" id="clearEmailLink" style="margin-left: 10px;">Clear Email</a>
   </div>
   <div class="card">
     <div class="field">
@@ -462,6 +463,29 @@
       table.appendChild(tbody);
       resultsDiv.appendChild(table);
     }
-  </script>
+</script>
+    <script>
+const clearLink = document.getElementById('clearEmailLink');
+if (clearLink) {
+    if (localStorage.getItem('emailVerified')) {
+        clearLink.style.display = 'inline';
+    } else {
+        clearLink.style.display = 'none';
+    }
+    clearLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        localStorage.removeItem('emailVerified');
+        localStorage.removeItem('verifiedEmail');
+        const emailInput = document.getElementById('email');
+        if (emailInput) {
+            emailInput.value = '';
+            emailInput.readOnly = false;
+        }
+        const overlay = document.getElementById('verificationOverlay');
+        if (overlay) overlay.style.display = 'flex';
+        clearLink.style.display = 'none';
+    });
+}
+</script>
 </body>
 </html>
