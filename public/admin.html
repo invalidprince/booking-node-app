@@ -40,7 +40,12 @@
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
-  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"></div></div><div class="card">
+  <div id="app" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div><button id="logoutBtn">Logout</button></div>
+      <div id="rightActions"></div>
+    </div>
+    <div class="card">
       <h2>Bookings</h2>
       <div class="row">
         <input id="bName" placeholder="Name">
@@ -51,8 +56,8 @@
         <input id="bDate" type="date" placeholder="Date">
         <input id="bStart" placeholder="Start Time" readonly>
         <input id="bEnd" placeholder="End Time" readonly>
-        <!-- The space selector for new bookings.  Set a minimum width so the dropdown
-             is always visible even when no options have been loaded yet. -->
+        <!-- The space selector for new bookings.  Set a minimum width so
+             the dropdown is always visible even when no options have been loaded yet. -->
         <select id="bSpace" style="min-width:140px;"></select>
         <button id="addBookingBtn">Add Booking</button>
       </div>
@@ -118,13 +123,12 @@
       <div id="analyticsResults" style="margin-top:12px;"></div>
       <div id="summaryResults" style="margin-top:12px;"></div>
     </div>
-
     <!-- Kiosk management section -->
-    </div>
-<script>
+  </div>
+
+  <script>
     let token = localStorage.getItem('adminToken') || '';
 
-    
     // ---- injected utilities for split pages ----
     function q(id){ return document.getElementById(id); }
     function on(id, event, handler){
@@ -143,8 +147,7 @@
       const right = document.getElementById('rightActions');
       if (!right) return;
       right.innerHTML = '';
-      // Use lowercase role for comparison.  Roles may be stored with
-      // inconsistent casing (e.g. "SuperAdmin"), so normalise here.
+      // Use lowercase role for comparison.  Roles may be stored with inconsistent casing (e.g. "SuperAdmin"), so normalise here.
       const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
       if (!false && role === 'superadmin'){
         const a = document.createElement('a');
@@ -157,32 +160,7 @@
       }
     }
     // ---- end utilities ----
-    
-    
-    // ---- injected utilities for split pages ----
-    function ensureSuperAdminIfNeeded(){
-      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
-      const token = localStorage.getItem('adminToken') || '';
-      if (!token) return;
-      if (false && role !== 'superadmin') { window.location.href = '/admin.html'; }
-    }
-    function updateSettingsLinkIfNeeded(){
-      const right = document.getElementById('rightActions');
-      if (!right) return;
-      right.innerHTML = '';
-      const role = (localStorage.getItem('adminRole') || 'admin').toLowerCase();
-      if (!false && role === 'superadmin'){
-        const a = document.createElement('a');
-        a.href = '/admin-settings.html';
-        a.title = 'Settings';
-        a.textContent = '⚙️ Settings';
-        a.style.textDecoration = 'none';
-        a.style.fontSize = '14px';
-        right.appendChild(a);
-      }
-    }
-    // ---- end utilities ----
-    
+
     // Helper to attach auth headers for admin requests
     function setAuthHeaders(opts = {}) {
       opts.headers = opts.headers || {};
@@ -190,12 +168,7 @@
       return opts;
     }
 
-    // Logout helper. Removes the stored admin token and returns the user to
-    // the public booking page. Without this function the page attempted to
-    // bind a click handler to an undefined `logout` symbol, causing the
-    // remainder of the admin script to abort before any of the booking
-    // functionality could initialise. See the bottom of this file where
-    // `logoutBtn` is wired up.
+    // Logout helper. Removes the stored admin token and returns the user to the public booking page.
     function logout() {
       try {
         localStorage.removeItem('adminToken');
@@ -208,11 +181,7 @@
       window.location.href = 'index.html';
     }
 
-    // Initiate a password reset request.  This handler reads the value
-    // from the username input, submits a POST to the forgot-password API
-    // and displays a generic success or error message to the user.  A
-    // meaningful response is always shown without revealing whether the
-    // account actually exists.
+    // Initiate a password reset request.
     async function forgotPassword(evt) {
       if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
       const statusEl = document.getElementById('loginStatus');
@@ -268,11 +237,7 @@
           token = data.token;
           localStorage.setItem('adminToken', token);
           if (data && data.role) {
-            // Normalize role to lowercase before storing.  Some database
-            // records may store roles with capitalisation (e.g. "SuperAdmin"),
-            // which causes downstream checks like updateSettingsLinkIfNeeded()
-            // to fail because comparisons are case sensitive.  Persist
-            // lowercase role so the UI consistently recognises superadmins.
+            // Normalize role to lowercase before storing.
             const roleLower = String(data.role).toLowerCase();
             localStorage.setItem('adminRole', roleLower);
           }
@@ -296,11 +261,7 @@
       }
     }
 
-    // Refresh all admin data after login.  The original implementation only
-    // loaded bookings, which meant the space selector remained empty until
-    // a separate call to loadSpaces() was made.  Without an option selected
-    // the Add Booking form cannot be submitted.  Load spaces before
-    // bookings so the dropdown is populated.
+    // Refresh all admin data after login.
     async function refreshAll(){
       try {
         if (typeof loadSpaces === 'function') {
@@ -386,15 +347,10 @@
       });
     }
 
-    // Create a simple date picker for inputs that should accept dates in YYYY-MM-DD
-    // format.  The native `<input type="date">` control is not reliable across
-    // all browsers or on remote sessions, so this helper shows a small dropdown
-    // with separate selects for month, day and year.  Selecting a date sets
-    // the corresponding text field's value (ISO format) and hides the picker.
+    // Create a simple date picker for inputs that should accept dates in YYYY-MM-DD format.
     function createDatePicker(inputId) {
       const input = document.getElementById(inputId);
       if (!input) return;
-      // Container for the dropdown
       const container = document.createElement('div');
       container.className = 'datepicker-dropdown';
       container.style.position = 'absolute';
@@ -405,7 +361,6 @@
       container.style.boxShadow = '0 2px 6px rgba(0,0,0,0.2)';
       container.style.zIndex = 1000;
 
-      // Month selector (1–12)
       const monthSelect = document.createElement('select');
       for (let m = 1; m <= 12; m++) {
         const opt = document.createElement('option');
@@ -414,9 +369,6 @@
         monthSelect.appendChild(opt);
       }
 
-      // Day selector (1–31).  We won't dynamically adjust day count per month; if
-      // the selected date does not exist (e.g. Feb 30) the server will reject
-      // it, but this still allows the admin to select any day quickly.
       const daySelect = document.createElement('select');
       for (let d = 1; d <= 31; d++) {
         const opt = document.createElement('option');
@@ -425,9 +377,6 @@
         daySelect.appendChild(opt);
       }
 
-      // Year selector.  Provide a range spanning from current year back one year
-      // and forward four years.  This should cover most booking windows but
-      // can be adjusted easily.
       const yearSelect = document.createElement('select');
       const currentYear = new Date().getFullYear();
       for (let y = currentYear - 1; y <= currentYear + 4; y++) {
@@ -438,11 +387,11 @@
         yearSelect.appendChild(opt);
       }
 
-      const setBtn = document.createElement('button');
-      setBtn.type = 'button';
-      setBtn.textContent = 'Set';
-      setBtn.style.marginLeft = '8px';
-      setBtn.onclick = () => {
+      const setBtn2 = document.createElement('button');
+      setBtn2.type = 'button';
+      setBtn2.textContent = 'Set';
+      setBtn2.style.marginLeft = '8px';
+      setBtn2.onclick = () => {
         const y = yearSelect.value;
         const m = monthSelect.value;
         const d = daySelect.value;
@@ -452,7 +401,7 @@
       container.appendChild(monthSelect);
       container.appendChild(daySelect);
       container.appendChild(yearSelect);
-      container.appendChild(setBtn);
+      container.appendChild(setBtn2);
 
       document.body.appendChild(container);
 
@@ -462,7 +411,7 @@
         container.style.top = `${rect.bottom + window.scrollY + 2}px`;
         container.style.display = 'block';
       });
-      // Hide the picker when clicking outside of the input or the container
+
       document.addEventListener('click', (e) => {
         if (e.target !== input && !container.contains(e.target)) {
           container.style.display = 'none';
@@ -525,25 +474,15 @@
     }
 
     async function loadSpaces() {
-      // Use authenticated headers when loading spaces. Without the auth header
-      // the server may return 401/403 and the dropdown remains empty. Passing
-      // the result of setAuthHeaders() will attach the Authorization header
-      // containing the current admin token. Note: GET is default.
-      // Fetch the list of spaces without requiring auth.  The spaces API is
-      // public (as seen on the booking page), so it’s safe to call it without
-      // credentials. Using an unauthenticated request also avoids cases where
-      // a valid token is not yet available when the page first loads.
       const res = await fetch('/api/spaces');
       const spaces = await res.json();
-      // If the settings table exists on this page, populate it.  The main admin
-      // panel does not include a spaces table (that lives on the settings
-      // page), so we need to guard against querying a non‑existent element.
       const spacesTable = document.querySelector('#spacesTable tbody');
       if (spacesTable) {
         spacesTable.innerHTML = '';
         spaces.forEach(s => {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
+          tr.innerHTML = 
+`<td>${s.name}</td><td>${s.type}</td><td>${s.priorityOrder}</td>
             <td><button data-id="${s.id}" class="delSpace">Delete</button></td>`;
           spacesTable.appendChild(tr);
         });
@@ -578,34 +517,11 @@
     async function loadBookings() {
       if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
       const { offset, limit } = window._pageState;
-      // Return the fetch promise so callers can await completion. This
-      // ensures that callers like addBooking() wait for the table to
-      // finish updating before continuing.
-      // Fetch bookings from the server.  We previously included
-      // `upcoming=1` in the query which filtered out past bookings.  This
-      // meant admins could only see upcoming bookings even though the
-      // database contained historical bookings.  Removing the upcoming
-      // filter allows the full set of bookings (subject to pagination) to
-      // be displayed.
-      // Fetch all bookings from the server.  We intentionally omit pagination
-      // parameters here so the server returns the full list instead of a
-      // paginated subset.  This ensures the admin UI always reflects the
-      // complete bookings table.  Sorting is applied client‑side below.
+      // Fetch all bookings from the server.
       return fetch('/api/bookings', setAuthHeaders())
         .then(r => r.json())
         .then(data => {
-          // When no query parameters are provided the server returns an array of
-          // bookings.  If query parameters are added in future this code still
-          // supports the `{ items, total }` shape.
           const items = Array.isArray(data) ? data : (data.items || []);
-          // Sort bookings in reverse chronological order so that newly
-          // created bookings appear at the top of the table.  When
-          // comparing dates we reverse the usual ascending order by
-          // swapping the operands of localeCompare; for start times we
-          // likewise compare in descending order.  This ensures that
-          // upcoming bookings are shown first and administrators can see
-          // their most recent entries without having to scroll to the
-          // bottom of the list.
           items.sort((a, b) => {
             const dateA = a.date || '';
             const dateB = b.date || '';
@@ -626,7 +542,8 @@
             const end12 = to12Hour(b.endTime);
             const dateFormatted = formatDateWithDay(b.date);
             const recurrenceDesc = formatRecurrence(b.recurrence);
-            tr.innerHTML = `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
+            tr.innerHTML = 
+`<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
               `<td>${dateFormatted}</td>` +
               `<td>${start12}</td>` +
               `<td>${end12}</td>` +
@@ -635,12 +552,10 @@
             tbody.appendChild(tr);
           });
 
-          // Since we render all bookings, the page info covers the full range.
           const start = total === 0 ? 0 : 1;
           const end = total;
           document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
 
-          // Disable pagination controls since all items are shown on one page.
           document.getElementById('prevPageBtn').disabled = true;
           document.getElementById('nextPageBtn').disabled = true;
         });
@@ -674,7 +589,7 @@
         } else if (type === 'weekday') {
           const nth = parseInt(document.getElementById('bRecurrenceNth').value, 10);
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
-          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency: 'monthly', nth, weekday };
+          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency:'monthly', nth, weekday };
         } else if (type === 'weekly') {
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
           if (!isNaN(weekday)) body.recurrence = { frequency: 'weekly', weekday };
@@ -687,18 +602,17 @@
         }));
 
         if (res.ok) {
-          // Reset to the first page so the newly added booking appears at the top
           if (window._pageState) window._pageState.offset = 0;
-          // Wait a short moment before reloading bookings.  Without a delay the
-          // newly created booking may not yet be visible because the server
-          // persists data asynchronously and reloads the in‑memory state.
           await new Promise(resolve => setTimeout(resolve, 200));
           await loadBookings();
-          // optional: clear inputs
-          // document.getElementById('bName').value = '';
-          // document.getElementById('bEmail').value = '';
-          // document.getElementById('bStart').value = '';
-          // document.getElementById('bEnd').value = '';
+          // show confirmation and clear inputs
+          alert('Booking added successfully');
+          document.getElementById('bName').value = '';
+          document.getElementById('bEmail').value = '';
+          document.getElementById('bDate').value = '';
+          document.getElementById('bStart').value = '';
+          document.getElementById('bEnd').value = '';
+          document.getElementById('bSpace').value = '';
         } else {
           const err = await res.json().catch(() => ({ error: 'Booking failed' }));
           alert(err.error || 'Booking failed');
@@ -726,7 +640,6 @@
         tbody.appendChild(tr);
       });
     }
-
 
     // Create a new admin user
     async function addAdmin() {
@@ -756,6 +669,7 @@
         alert('Failed to create admin');
       }
     }
+
     // Load kiosk tokens from the server and render into the table
     async function loadKioskTokens() {
       const tableBody = document.querySelector('#kioskTokensTable tbody');
@@ -915,9 +829,7 @@
       const blob = new Blob([text], { type: 'text/csv' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      // Use a descriptive filename reflecting that we export bookings, not
-      // aggregated analytics.  The server will deliver a file named
-      // bookings.csv, so match that here.
+      // Use a descriptive filename reflecting that we export bookings.
       link.download = 'bookings.csv';
       document.body.appendChild(link);
       link.click();
@@ -1019,10 +931,10 @@
       if (token) {
         document.getElementById('loginCard').classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
-          updateSettingsLinkIfNeeded();
-          ensureSuperAdminIfNeeded();
-          updateSettingsLinkIfNeeded();
-          ensureSuperAdminIfNeeded();
+        updateSettingsLinkIfNeeded();
+        ensureSuperAdminIfNeeded();
+        updateSettingsLinkIfNeeded();
+        ensureSuperAdminIfNeeded();
         refreshAll();
       }
 
@@ -1061,7 +973,9 @@
         const el = document.getElementById('bookingsTable');
         if (el) {
           el.addEventListener('click', (e) => {
-            if (e.target.classList.contains('delBooking')) deleteBooking(e.target.dataset.id);
+            // Use closest to handle nested elements inside the cancel button
+            const btn = e.target.closest('.delBooking');
+            if (btn) deleteBooking(btn.dataset.id);
           });
         }
       }
@@ -1094,9 +1008,8 @@
       if (document.getElementById('bStart')) createTimePicker('bStart');
       if (document.getElementById('bEnd')) createTimePicker('bEnd');
 
-      // Use the native HTML date input for the booking date.  The
-      // custom date picker (createDatePicker) is no longer required, so
-      // this call is commented out.
+      // Use the native HTML date input for the booking date.
+      // The custom date picker (createDatePicker) is no longer required.
       // if (document.getElementById('bDate')) createDatePicker('bDate');
 
       // Bind analytics & exports
@@ -1107,7 +1020,7 @@
       const csvBtn = document.getElementById('downloadCsvBtn');
       if (csvBtn) csvBtn.addEventListener('click', downloadCsv);
 
-          // Kiosk actions
+      // Kiosk actions
       const genBtn = document.getElementById('generateKioskBtn');
       if (genBtn) genBtn.addEventListener('click', generateKioskToken);
       const kioskTable = document.getElementById('kioskTokensTable');
@@ -1120,14 +1033,10 @@
         });
       }
 
-          // Ensure the space dropdown is populated even if the user was already
-          // logged in (e.g. after a page refresh).  Calling loadSpaces() here
-          // guarantees the <select id="bSpace"> options are filled without
-          // waiting for the login flow to run refreshAll().  The function
-          // silently fails if it does not exist.
-          try { if (typeof loadSpaces === 'function') { loadSpaces(); } } catch(e) {
-            console.error('loadSpaces init error', e);
-          }
+      // Ensure the space dropdown is populated even if the user was already logged in.
+      try { if (typeof loadSpaces === 'function') { loadSpaces(); } } catch(e) {
+        console.error('loadSpaces init error', e);
+      }
     });
   </script>
 </body>
