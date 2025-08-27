@@ -624,7 +624,21 @@
     }
 
     async function deleteBooking(id) {
-      await fetch('/api/bookings/' + id, setAuthHeaders({ method: 'DELETE' }));
+      // Send a DELETE request to remove a booking. After the request
+      // completes, provide feedback to the admin and reload the table.
+      try {
+        const res = await fetch('/api/bookings/' + id, setAuthHeaders({ method: 'DELETE' }));
+        if (res.ok) {
+          alert('Booking cancelled successfully.');
+        } else {
+          const err = await res.json().catch(() => ({ error: 'Failed to cancel booking' }));
+          alert(err.error || 'Failed to cancel booking.');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Failed to cancel booking.');
+      }
+      // Always reload the bookings table so the UI reflects the current state.
       await loadBookings();
     }
 

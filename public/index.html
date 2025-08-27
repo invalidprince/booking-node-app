@@ -246,6 +246,17 @@
             const data = await res.json();
             statusEl.style.color = 'green';
             statusEl.textContent = `Success! Reserved ${data.spaceName} on ${date}.`;
+            // Clear form fields after a successful auto booking. This
+            // ensures the user sees confirmation and can start a new
+            // booking without manually clearing inputs.
+            document.getElementById('name').value = '';
+            document.getElementById('email').value = '';
+            document.getElementById('date').value = '';
+            document.getElementById('start-time').value = '';
+            document.getElementById('end-time').value = '';
+            // Reset space selection back to default (first option)
+            const spaceSelect = document.getElementById('space');
+            if (spaceSelect) spaceSelect.selectedIndex = 0;
           } else {
             const err = await res.json();
             statusEl.style.color = 'red';
@@ -261,6 +272,14 @@
             const data = await res.json();
             statusEl.style.color = 'green';
             statusEl.textContent = `Success! Your booking ID is ${data.id}.`;
+            // Clear form fields on successful manual booking
+            document.getElementById('name').value = '';
+            document.getElementById('email').value = '';
+            document.getElementById('date').value = '';
+            document.getElementById('start-time').value = '';
+            document.getElementById('end-time').value = '';
+            const spaceSelect2 = document.getElementById('space');
+            if (spaceSelect2) spaceSelect2.selectedIndex = 0;
           } else {
             const err = await res.json();
             statusEl.style.color = 'red';
