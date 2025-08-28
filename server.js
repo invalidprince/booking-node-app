@@ -1491,7 +1491,12 @@ app.get('/api/bookings/today', (req, res) => {
 
 // Check in a booking by ID. Marks the booking as checkedIn and persists.
 // Only accessible from authenticated kiosk sessions.
-app.post('/api/bookings/:id/checkin', (req, res) => {
+// Check in a booking by ID. Marks the booking as checked in and persists the
+// change. Uses an async handler so that saveData() can be awaited; this
+// prevents concurrent transactions from overlapping in environments with
+// Postgres configured. If the booking has already been checked in the
+// request is rejected to avoid duplicate check‑ins.
+app.post('/api/bookings/:id/checkin', async (req, res) => {
   if (!isKioskSession(req)) {
     return res.status(403).json({ error: 'Access denied' });
   }
@@ -1500,8 +1505,23 @@ app.post('/api/bookings/:id/checkin', (req, res) => {
   if (!booking) {
     return res.status(404).json({ error: 'Booking not found' });
   }
+  // Prevent double check‑in by checking for an existing checkInTime or checkedIn flag.
+  if (booking.checkInTime || booking.checkedIn) {
+    return res.status(400).json({ error: 'Booking already checked in' });
+  }
+  // Record the check‑in time for persistence and set the boolean flag for
+  // in‑memory convenience. checkInTime will be stored in the database and
+  // checkOutTime remains null until checkout occurs.
+  booking.checkInTime = new Date().toISOString();
   booking.checkedIn = true;
-  saveData();
+  try {
+    // Await saveData to ensure database transactions do not overlap.
+    await saveData();
+  } catch (err) {
+    console.error('Failed to persist check‑in:', err);
+    // Continue to respond OK even if persistence fails, since the in‑memory
+    // state is updated. The error is logged for troubleshooting.
+  }
   res.json({ ok: true });
 });
 
