@@ -487,6 +487,29 @@ const verificationTokens = {};
 const kioskTokens = [];
 const kioskSessions = {};
 
+// Helper to determine if a request originates from a valid kiosk session.
+// Without cookie‑parser middleware Express does not populate req.cookies, so
+// we parse the `Cookie` header manually. A kiosk session is considered
+// valid when a `kioskToken` cookie is present and its value exists in
+// the in‑memory kioskSessions map. This helper returns true if the
+// session is authenticated and false otherwise.
+function isKioskSession(req) {
+  // Ensure there is a cookie header to parse
+  const header = req && req.headers && req.headers.cookie;
+  if (!header) return false;
+  const cookies = {};
+  // Split by semicolons and trim each key/value pair
+  header.split(';').forEach(part => {
+    const [name, ...valParts] = part.trim().split('=');
+    if (!name) return;
+    const value = valParts.join('=');
+    // Decode URI components in case values are encoded
+    cookies[name] = decodeURIComponent(value || '');
+  });
+  const token = cookies.kioskToken;
+  return !!(token && kioskSessions[token]);
+}
+
 
 
 // Kiosk token management declarations moved to the top of the file. See the
