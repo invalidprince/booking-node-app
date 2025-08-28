@@ -120,21 +120,30 @@
         const spaces = await res.json();
         const select = document.getElementById('space');
         select.innerHTML = '';
-        // Auto-booking options
+        // Auto-booking options. Display desk and conference room first so
+        // users can quickly reserve the next available desk or conference
+        // room. These use the `auto-desk` and `auto-conference` values and
+        // will be interpreted by the server to select the appropriate type.
         const autoDesk = document.createElement('option');
         autoDesk.value = 'auto-desk';
         autoDesk.textContent = 'Auto book Desk';
         select.appendChild(autoDesk);
-        const autoOffice = document.createElement('option');
-        autoOffice.value = 'auto-office';
-        autoOffice.textContent = 'Auto book Office';
-        select.appendChild(autoOffice);
-        spaces.forEach(space => {
-          const opt = document.createElement('option');
-          opt.value = space.id;
-          opt.textContent = space.name;
-          select.appendChild(opt);
-        });
+        const autoConference = document.createElement('option');
+        autoConference.value = 'auto-conference';
+        autoConference.textContent = 'Auto book Conference Room';
+        select.appendChild(autoConference);
+        // Sort spaces by priorityOrder before populating the dropdown. Lower
+        // priority numbers should appear first. Auto-book options remain at
+        // the top.
+        spaces
+          .slice() // make a copy to avoid mutating the original array
+          .sort((a, b) => (a.priorityOrder || 0) - (b.priorityOrder || 0))
+          .forEach(space => {
+            const opt = document.createElement('option');
+            opt.value = space.id;
+            opt.textContent = space.name;
+            select.appendChild(opt);
+          });
       } catch (err) {
         console.error(err);
       }
@@ -239,7 +248,15 @@
       try {
         // Client‑side verification is not enforced here; overlay ensures the first visit verification.
         if (spaceVal.startsWith('auto-')) {
-          const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
+          // Determine the space type based on the selected auto option.  The
+          // server understands the `type` parameter as 'desk', 'office' or
+          // 'conference'.  When a new auto option is added (e.g. auto‑conference),
+          // we map it accordingly here.  Default to 'office' for backward
+          // compatibility.
+          let type;
+          if (spaceVal === 'auto-desk') type = 'desk';
+          else if (spaceVal === 'auto-conference') type = 'conference';
+          else type = 'office';
           const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
           const res = await fetch('/api/bookings/auto?' + params.toString());
           if (res.ok) {

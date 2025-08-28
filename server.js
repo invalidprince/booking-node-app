@@ -44,6 +44,50 @@ const BACKUP_DIR = process.env.BACKUP_DIR || path.join(DATA_DIR, 'backups');
 const BACKUP_RETENTION = 10;
 
 // -----------------------------------------------------------------------------
+// Formatting helpers
+//
+// These utilities convert ISO dates (YYYY-MM-DD) and 24‑hour times (HH:MM)
+// into the MM/DD/YYYY and 12‑hour time formats requested by the user.  They
+// are used in outgoing emails and confirmation pages to present dates and
+// times in a more human‑friendly way.
+
+/**
+ * Convert an ISO date string (YYYY‑MM‑DD) into the US‑style format
+ * MM/DD/YYYY.  If the input is invalid the original value is returned.
+ *
+ * @param {string} isoDate The date string in YYYY‑MM‑DD format
+ * @returns {string} The formatted date in MM/DD/YYYY format
+ */
+function formatDateMMDDYYYY(isoDate) {
+  if (!isoDate || typeof isoDate !== 'string') return isoDate;
+  const parts = isoDate.split('-');
+  if (parts.length !== 3) return isoDate;
+  const [year, month, day] = parts;
+  return `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}`;
+}
+
+/**
+ * Convert a 24‑hour time string (HH:MM) into a 12‑hour time with AM/PM.
+ * Returns the original value if parsing fails.
+ *
+ * @param {string} time24 The time string in HH:MM format
+ * @returns {string} The formatted time in 12‑hour format (e.g. 01:00 PM)
+ */
+function formatTimeTo12H(time24) {
+  if (!time24 || typeof time24 !== 'string') return time24;
+  const [hourStr, minute] = time24.split(':');
+  let hour = parseInt(hourStr, 10);
+  if (isNaN(hour)) return time24;
+  const period = hour >= 12 ? 'PM' : 'AM';
+  if (hour === 0) {
+    hour = 12;
+  } else if (hour > 12) {
+    hour -= 12;
+  }
+  return `${hour.toString().padStart(2, '0')}:${minute} ${period}`;
+}
+
+// -----------------------------------------------------------------------------
 // Database configuration
 //
 // When a DATABASE_URL environment variable is provided the application will
@@ -652,13 +696,20 @@ async function sendBookingConfirmationEmail(
   cancelLink,
   context = ''
 ) {
+  // Format the date and time values for the confirmation email.  The
+  // application stores dates as ISO strings (YYYY‑MM‑DD) and times in
+  // 24‑hour HH:MM format.  Present these values in the more readable
+  // MM/DD/YYYY and 12‑hour formats for end users.
+  const formattedDate = formatDateMMDDYYYY(date);
+  const formattedStart = formatTimeTo12H(start);
+  const formattedEnd = formatTimeTo12H(end);
   const emailText =
     `Hello ${name},\n\n` +
     `Your booking has been confirmed!\n\n` +
     `Space: ${space}\n` +
-    `Date: ${date}\n` +
-    `Start Time: ${start}\n` +
-    `End Time: ${end}\n\n` +
+    `Date: ${formattedDate}\n` +
+    `Start Time: ${formattedStart}\n` +
+    `End Time: ${formattedEnd}\n\n` +
     `If you need to cancel your booking, please click the link below:\n` +
     `${cancelLink}\n\n` +
     `Thank you.`;
@@ -1288,23 +1339,28 @@ app.get('/cancel/:id', async (req, res) => {
     } catch (err) {
       console.error('Failed to save data after cancellation:', err);
     }
-    // Send a cancellation email to the user.  Include basic booking details.
+    // Send a cancellation email to the user.  Include formatted booking details.
     try {
       const spaceName = spaces.find(s => s.id === removed.spaceId)?.name || removed.spaceId;
       const subject = 'Booking Cancelled';
+      // Format date and time values for user readability
+      const formattedDate = formatDateMMDDYYYY(removed.date);
+      const formattedStart = formatTimeTo12H(removed.startTime);
+      const formattedEnd = formatTimeTo12H(removed.endTime);
       const body =
         `Hello ${removed.name},\n\n` +
-        `Your booking for ${spaceName} on ${removed.date} from ${removed.startTime} to ${removed.endTime} has been cancelled.\n\n` +
+        `Your booking for ${spaceName} on ${formattedDate} from ${formattedStart} to ${formattedEnd} has been cancelled.\n\n` +
         `Thank you.`;
       await sendEmail(removed.email, subject, body);
     } catch (err) {
       console.error('Error sending cancellation email', err);
     }
-    // Respond with a simple confirmation page
+    // Respond with a confirmation page including a link back to the booking page
     return res.send(
       '<html><head><title>Booking Cancelled</title></head><body>' +
       '<h1>Booking Cancelled</h1>' +
       '<p>Your booking has been successfully cancelled.</p>' +
+      '<p><a href="/index.html">Return to bookings page</a></p>' +
       '</body></html>'
     );
   }
