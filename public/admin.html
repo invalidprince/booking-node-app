@@ -487,15 +487,40 @@
           spacesTable.appendChild(tr);
         });
       }
-      // Populate booking space selector
+      // Populate booking space selector.  Include auto‑booking options for
+      // desk and office at the top, then real spaces grouped by type and
+      // sorted by ascending priorityOrder.  Group order: desks, offices,
+      // conference rooms.
       const sSel = document.getElementById('bSpace');
       sSel.innerHTML = '';
-      spaces.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.name;
-        sSel.appendChild(opt);
-      });
+      // Auto options (similar to main booking page).  These values will be
+      // interpreted by addBooking() to invoke the auto‑booking API.
+      const autoDeskOpt = document.createElement('option');
+      autoDeskOpt.value = 'auto-desk';
+      autoDeskOpt.textContent = 'Auto book Desk';
+      sSel.appendChild(autoDeskOpt);
+      const autoOfficeOpt = document.createElement('option');
+      autoOfficeOpt.value = 'auto-office';
+      autoOfficeOpt.textContent = 'Auto book Office';
+      sSel.appendChild(autoOfficeOpt);
+      // Sort real spaces by type grouping and priority
+      const typeOrder = { desk: 1, office: 2, conference: 3 };
+      spaces
+        .slice()
+        .sort((a, b) => {
+          const aType = typeOrder[a.type] || 999;
+          const bType = typeOrder[b.type] || 999;
+          if (aType !== bType) return aType - bType;
+          const aPrio = a.priorityOrder || 0;
+          const bPrio = b.priorityOrder || 0;
+          return aPrio - bPrio;
+        })
+        .forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          sSel.appendChild(opt);
+        });
     }
 
     async function addSpace() {
@@ -581,20 +606,50 @@
 
         const body = { name, email, date, startTime, endTime, spaceId };
 
-        // Recurrence payload
-        const type = document.getElementById('bRecurrenceType').value;
-        if (type === 'day') {
+        // Recurrence payload.  The API expects a `recurring` object when a
+        // booking recurs.  Transform the selected recurrence type into
+        // `recurring` instead of the previously used `recurrence` key.
+        const recType = document.getElementById('bRecurrenceType').value;
+        if (recType === 'day') {
           const day = parseInt(document.getElementById('bRecurrenceDay').value, 10);
-          if (!isNaN(day)) body.recurrence = { frequency: 'monthly', dayOfMonth: day };
-        } else if (type === 'weekday') {
+          if (!isNaN(day)) body.recurring = { frequency: 'monthly', dayOfMonth: day };
+        } else if (recType === 'weekday') {
           const nth = parseInt(document.getElementById('bRecurrenceNth').value, 10);
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
-          if (!isNaN(nth) && !isNaN(weekday)) body.recurrence = { frequency:'monthly', nth, weekday };
-        } else if (type === 'weekly') {
+          if (!isNaN(nth) && !isNaN(weekday)) body.recurring = { frequency:'monthly', nth, weekday };
+        } else if (recType === 'weekly') {
           const weekday = parseInt(document.getElementById('bRecurrenceWeekday').value, 10);
-          if (!isNaN(weekday)) body.recurrence = { frequency: 'weekly', weekday };
+          if (!isNaN(weekday)) body.recurring = { frequency: 'weekly', weekday };
         }
 
+        // If the user selected an auto booking option, call the auto endpoint.
+        if (String(spaceId).startsWith('auto-')) {
+          // Determine the space type based on the selected auto option.
+          let autoType;
+          if (spaceId === 'auto-desk') autoType = 'desk';
+          else autoType = 'office';
+          const params = new URLSearchParams({ type: autoType, date, start: startTime, end: endTime, name, email });
+          // Note: Auto bookings are anonymous endpoints and do not require admin auth
+          const autoRes = await fetch('/api/bookings/auto?' + params.toString());
+          if (autoRes.ok) {
+            if (window._pageState) window._pageState.offset = 0;
+            // Wait briefly to allow data persistence and then reload the bookings
+            await new Promise(resolve => setTimeout(resolve, 200));
+            await loadBookings();
+            alert('Booking added successfully');
+            document.getElementById('bName').value = '';
+            document.getElementById('bEmail').value = '';
+            document.getElementById('bDate').value = '';
+            document.getElementById('bStart').value = '';
+            document.getElementById('bEnd').value = '';
+            document.getElementById('bSpace').value = '';
+          } else {
+            const err = await autoRes.json().catch(() => ({ error: 'Auto-book failed' }));
+            alert(err.error || 'Auto-book failed');
+          }
+          return;
+        }
+        // For manual or recurring bookings, submit via POST /api/bookings with admin auth
         const res = await fetch('/api/bookings', setAuthHeaders({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

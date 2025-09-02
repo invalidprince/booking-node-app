@@ -49,12 +49,29 @@
       spaces = await res.json();
       const select = document.getElementById('avSpace');
       select.innerHTML = '';
-      spaces.forEach(s => {
-        const opt = document.createElement('option');
-        opt.value = s.id;
-        opt.textContent = s.name;
-        select.appendChild(opt);
-      });
+      /*
+       * Sort the spaces in the same way as the main booking page: desks first,
+       * then offices, then conference rooms. Within each group sort by
+       * ascending priorityOrder. No auto options are included on the
+       * availability page.
+       */
+      const typeOrder = { desk: 1, office: 2, conference: 3 };
+      spaces
+        .slice()
+        .sort((a, b) => {
+          const aType = typeOrder[a.type] || 999;
+          const bType = typeOrder[b.type] || 999;
+          if (aType !== bType) return aType - bType;
+          const aPrio = a.priorityOrder || 0;
+          const bPrio = b.priorityOrder || 0;
+          return aPrio - bPrio;
+        })
+        .forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = s.name;
+          select.appendChild(opt);
+        });
     }
 
     // Generate time slots in 30 minute increments between 8:00 and 18:00
