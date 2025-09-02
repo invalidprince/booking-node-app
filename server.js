@@ -203,6 +203,32 @@ async function initDb() {
 const app = express();
 const PORT = process.env.PORT || 5050;
 
+// -----------------------------------------------------------------------------
+// Global error handlers
+//
+// Render and many Node hosting providers will restart a crashed process, but
+// transient exceptions or unhandled promise rejections can still result in
+// intermittent 5xx responses (e.g. 502 or 503) while the service restarts.
+// Register global handlers to log unexpected errors without allowing them to
+// terminate the process.  These handlers simply report the error details to
+// stderr.  You may choose to add further alerting or recovery logic here.
+
+process.on('unhandledRejection', (reason, promise) => {
+  try {
+    console.error('Unhandled Promise rejection:', reason);
+  } catch (_) {
+    // If console.error fails for some reason, ignore to avoid another crash
+  }
+});
+
+process.on('uncaughtException', err => {
+  try {
+    console.error('Uncaught exception:', err);
+  } catch (_) {
+    // Silently ignore any further errors to keep the process alive
+  }
+});
+
 // Base URL used in emails for links. Should be set via the environment when deployed
 const APP_BASE_URL = process.env.APP_BASE_URL || '';
 
@@ -1393,73 +1419,79 @@ app.get('/api/availability', (req, res) => {
 
 // Auto-book: automatically assign the next available space of a given type.
 app.get('/api/bookings/auto', (req, res) => {
-  const { type, date, start: startTime, end: endTime, name, email } = req.query;
-  if (!type || !date || !startTime || !endTime || !name || !email) {
-    return res.status(400).json({ error: 'Missing parameters for auto-booking' });
-  }
-  // Enforce company email domain for auto bookings (trim and normalise case)
-  const emailNormalized = String(email).trim().toLowerCase();
-  if (!emailNormalized.endsWith('@fbhi.net')) {
-    return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
-  }
-
-  // Prevent bookings in the past relative to America/New_York timezone.  Compute
-  // the selected start datetime and compare against the current Eastern time.
   try {
-    const selectedStart = new Date(`${date}T${startTime}:00`);
-    const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
-    const easternNow = new Date(easternNowStr);
-    if (selectedStart < easternNow) {
-      return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+    const { type, date, start: startTime, end: endTime, name, email } = req.query;
+    if (!type || !date || !startTime || !endTime || !name || !email) {
+      return res.status(400).json({ error: 'Missing parameters for auto-booking' });
     }
+    // Enforce company email domain for auto bookings (trim and normalise case)
+    const emailNormalized = String(email).trim().toLowerCase();
+    if (!emailNormalized.endsWith('@fbhi.net')) {
+      return res.status(400).json({ error: 'Email must be a @fbhi.net address' });
+    }
+
+    // Prevent bookings in the past relative to America/New_York timezone.  Compute
+    // the selected start datetime and compare against the current Eastern time.
+    try {
+      const selectedStart = new Date(`${date}T${startTime}:00`);
+      const easternNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+      const easternNow = new Date(easternNowStr);
+      if (selectedStart < easternNow) {
+        return res.status(400).json({ error: 'Cannot book a date/time in the past' });
+      }
+    } catch (err) {
+      // ignore parse errors
+    }
+    const candidates = spaces
+      .filter(s => s.type === type)
+      .sort((a, b) => (a.priorityOrder || 0) - (b.priorityOrder || 0));
+    for (const space of candidates) {
+      if (isSpaceAvailable(space.id, date, startTime, endTime)) {
+        const id = uuidv4();
+        const booking = {
+          id,
+          name,
+          email: emailNormalized,
+          spaceId: space.id,
+          date,
+          startTime,
+          endTime,
+          recurring: false,
+          checkedIn: false
+        };
+        bookings.push(booking);
+        // Persist immediately so that cancellation link works even if the process restarts
+        try { saveData(); } catch (err) { console.error('Error saving data', err); }
+        // Send booking confirmation email asynchronously
+        (async () => {
+          try {
+            const spaceName = space.name;
+            const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+            const cancelLink = `${baseUrl}/cancel/${id}`;
+            // Use helper to build and send booking confirmation email (auto context)
+            await sendBookingConfirmationEmail(
+              name,
+              emailNormalized,
+              spaceName,
+              date,
+              startTime,
+              endTime,
+              cancelLink,
+              'auto'
+            );
+          } catch (err) {
+            console.error('Error sending booking confirmation (auto)', err);
+          }
+        })();
+        return res.json({ id, spaceName: space.name });
+      }
+    }
+    return res.status(404).json({ error: 'No spaces available for the requested time' });
   } catch (err) {
-    // ignore parse errors
+    // Catch any unexpected errors to avoid crashing the process and return a 500
+    console.error('Auto booking unexpected error:', err);
+    return res.status(500).json({ error: 'internal-error' });
   }
-  const candidates = spaces
-    .filter(s => s.type === type)
-    .sort((a, b) => a.priorityOrder - b.priorityOrder);
-  for (const space of candidates) {
-    if (isSpaceAvailable(space.id, date, startTime, endTime)) {
-      const id = uuidv4();
-      const booking = {
-        id,
-        name,
-        email: emailNormalized,
-        spaceId: space.id,
-        date,
-        startTime,
-        endTime,
-        recurring: false,
-        checkedIn: false
-      };
-      bookings.push(booking);
-      // Persist immediately so that cancellation link works even if the process restarts
-      saveData();
-      // Send booking confirmation email asynchronously
-      (async () => {
-        try {
-          const spaceName = space.name;
-          const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
-          const cancelLink = `${baseUrl}/cancel/${id}`;
-          // Use helper to build and send booking confirmation email (auto context)
-          await sendBookingConfirmationEmail(
-            name,
-            emailNormalized,
-            spaceName,
-            date,
-            startTime,
-            endTime,
-            cancelLink,
-            'auto'
-          );
-        } catch (err) {
-          console.error('Error sending booking confirmation (auto)', err);
-        }
-      })();
-      return res.json({ id, spaceName: space.name });
-    }
-  }
-  res.status(404).json({ error: 'No spaces available for the requested time' });
 });
 
 // Admin user management
