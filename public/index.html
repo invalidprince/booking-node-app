@@ -406,12 +406,33 @@
         const data = await res.json();
         const sel = document.getElementById('avSpace');
         sel.innerHTML = '';
-        data.forEach(space => {
-          const opt = document.createElement('option');
-          opt.value = space.id;
-          opt.textContent = space.name;
-          sel.appendChild(opt);
-        });
+        /*
+         * Sort the availability dropdown the same way as the main booking
+         * dropdown, but without auto options.  We group spaces by their
+         * type (desks first, then offices, then conference rooms) and
+         * within each group order them by priorityOrder ascending.  If
+         * priorityOrder is undefined, treat it as 0 so spaces without
+         * explicit priority appear last within their group.  This
+         * ensures users see desks before offices and conference rooms in
+         * a consistent order.
+         */
+        const typeOrder = { desk: 1, office: 2, conference: 3 };
+        data
+          .slice()
+          .sort((a, b) => {
+            const aType = typeOrder[a.type] || 999;
+            const bType = typeOrder[b.type] || 999;
+            if (aType !== bType) return aType - bType;
+            const aPrio = a.priorityOrder || 0;
+            const bPrio = b.priorityOrder || 0;
+            return aPrio - bPrio;
+          })
+          .forEach(space => {
+            const opt = document.createElement('option');
+            opt.value = space.id;
+            opt.textContent = space.name;
+            sel.appendChild(opt);
+          });
       } catch (err) {
         console.error(err);
       }
