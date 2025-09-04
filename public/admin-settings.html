@@ -84,7 +84,7 @@
       <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
       <table id="kioskTokensTable">
         <thead>
-          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
+          <tr><th>ID</th><th>Code</th><th>Label</th><th>Action</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -602,7 +602,7 @@
            * always triggered even if event listeners are not attached or
            * removed.
            */
-          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td>` +
+          tr.innerHTML = `<td>${t.id}</td><td>${t.code}</td><td>${t.label || ''}</td>` +
                          `<td><button onclick="revokeKioskToken('${t.id}')">Revoke</button></td>`;
           tableBody.appendChild(tr);
         });
@@ -613,7 +613,8 @@
 
     // Request a new kiosk token from the server and display the result
     async function generateKioskToken() {
-      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST' }));
+      const label = prompt('Enter label for this kiosk device') || '';
+      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) }));
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed to generate token' }));
         alert(err.error || 'Failed to generate token');
@@ -621,7 +622,7 @@
       }
       const data = await res.json();
       const display = document.getElementById('newKioskToken');
-      display.textContent = `Token code: ${data.code}`;
+      display.textContent = `Token code: ${data.code}${data.label ? ' (' + data.label + ')' : ''}`;
       await loadKioskTokens();
     }
 
