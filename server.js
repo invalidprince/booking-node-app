@@ -171,7 +171,8 @@ async function initDb() {
     );`,
     `CREATE TABLE IF NOT EXISTS "kioskTokens" (
       id UUID PRIMARY KEY,
-      code TEXT
+      code TEXT,
+      label TEXT
     );`
   ];
   for (const stmt of createStatements) {
@@ -347,9 +348,14 @@ async function saveData() {
       for (const email of verifiedEmails) {
         await db.query('INSERT INTO "verifiedEmails" (email) VALUES ($1)', [email]);
       }
-      // Insert kiosk tokens
+      // Insert kiosk tokens. Include optional label; if the column is missing
+      // fall back to inserting without it so existing deployments continue to work.
       for (const kt of kioskTokens) {
-        await db.query('INSERT INTO "kioskTokens" (id, code) VALUES ($1, $2)', [kt.id, kt.code]);
+        try {
+          await db.query('INSERT INTO "kioskTokens" (id, code, label) VALUES ($1, $2, $3)', [kt.id, kt.code, kt.label || null]);
+        } catch (err) {
+          await db.query('INSERT INTO "kioskTokens" (id, code) VALUES ($1, $2)', [kt.id, kt.code]);
+        }
       }
       await db.query('COMMIT');
     } catch (err) {
@@ -410,11 +416,18 @@ async function loadData() {
       // Load verified emails from the database
       const verifiedRes = await db.query('SELECT email FROM "verifiedEmails"');
       verifiedEmails.splice(0, verifiedEmails.length, ...verifiedRes.rows.map(r => r.email));
-      // Load kiosk tokens from the database
-      const tokenRes = await db.query('SELECT id, code FROM "kioskTokens"');
+      // Load kiosk tokens from the database, including optional labels. If the
+      // label column does not exist yet, fall back to selecting only id and code.
+      let tokenRes;
+      try {
+        tokenRes = await db.query('SELECT id, code, label FROM "kioskTokens"');
+      } catch (err) {
+        tokenRes = await db.query('SELECT id, code FROM "kioskTokens"');
+      }
       kioskTokens.splice(0, kioskTokens.length, ...tokenRes.rows.map(r => ({
         id: r.id,
-        code: r.code
+        code: r.code,
+        label: r.label || ''
       })));
       return;
     } catch (err) {
@@ -2051,7 +2064,8 @@ app.post('/api/kiosk/tokens', adminAuth, async (req, res) => {
   try {
     const id = uuidv4();
     const code = generateKioskCode();
-    kioskTokens.push({ id, code });
+    const label = (req.body && typeof req.body.label === 'string') ? req.body.label : '';
+    kioskTokens.push({ id, code, label });
     // Persist new token to storage. Await to catch any potential errors from
     // asynchronous database or filesystem writes. If persistence fails we
     // remove the token from memory so it doesn’t exist without being saved.
@@ -2064,7 +2078,7 @@ app.post('/api/kiosk/tokens', adminAuth, async (req, res) => {
       if (idx >= 0) kioskTokens.splice(idx, 1);
       return res.status(500).json({ error: 'Failed to save token' });
     }
-    return res.json({ id, code });
+    return res.json({ id, code, label });
   } catch (err) {
     console.error('Error generating kiosk token', err);
     return res.status(500).json({ error: 'Failed to generate token' });
