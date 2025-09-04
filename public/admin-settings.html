@@ -81,10 +81,93 @@
       <div class="row">
         <button id="generateKioskBtn">Generate Token</button>
       </div>
+      TYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+    h1, h2 { color: #333; }
+    .hidden { display: none; }
+    .card { background: white; padding: 16px; margin-bottom: 18px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
+    input, select, button { margin: 4px; padding: 6px 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #fafafa; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .recurrence-controls select, .recurrence-controls input { min-width: 80px; }
+    .recurrence-controls label { margin-left: 4px; }
+    /* Timepicker dropdown styling (copied from main booking page) */
+    .timepicker-dropdown select { margin-right: 4px; padding: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Admin Portal</h1>
+  <!-- Back link to return to the main admin dashboard -->
+  <div style="margin-bottom:12px;"><a href="/admin.html" style="text-decoration:none; font-size:14px;">← Back to Dashboard</a></div>
+  <div id="loginCard" class="card">
+    <h2>Login</h2>
+    <div class="row">
+      <input id="username" placeholder="Username (admin@example.com)">
+      <input id="password" placeholder="Password (admin123)" type="password">
+      <!-- Prevent accidental form-submit reloads -->
+      <button id="loginBtn" type="button">Login</button>
+    </div>
+    <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
+  </div>
+  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div></div><div class="card">
+      <h2>Spaces</h2>
+      <div class="row">
+        <input id="spaceName" placeholder="Name">
+        <select id="spaceType">
+          <option value="desk">Desk</option>
+          <option value="office">Office</option>
+          <option value="conference">Conference</option>
+        </select>
+        <input id="spacePriority" type="number" placeholder="Priority (1 = highest)" value="1" min="1">
+        <button id="addSpaceBtn">Add Space</button>
+      </div>
+      <table id="spacesTable">
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Priority</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Bookings management -->
+    <div class="card">
+      <h2>Admin Users</h2>
+      <div class="row">
+        <input id="aUser" placeholder="username (email)">
+        <input id="aPass" placeholder="password">
+        <!-- Role selection for new admin users -->
+        <select id="aRole">
+          <option value="admin" selected>Admin</option>
+          <option value="superadmin">Super Admin</option>
+        </select>
+        <button id="addAdminBtn">Add Admin</button>
+      </div>
+      <table id="adminsTable">
+        <thead>
+          <tr><th>Username</th><th>Role</th><th>Action</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Analytics section -->
+    <div class="card">
+      <h2>Kiosk Devices</h2>
+      <div class="row">
+        <button id="generateKioskBtn">Generate Token</button>
+      </div>
       <div id="newKioskToken" style="margin-top:8px;font-weight:bold;"></div>
       <table id="kioskTokensTable">
         <thead>
-          <tr><th>ID</th><th>Code</th><th>Action</th></tr>
+          <tr><th>ID</th><th>Code</th><th>Label</th><th>Action</th></tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -613,7 +696,7 @@
 
     // Request a new kiosk token from the server and display the result
     async function generateKioskToken() {
-      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST' }));
+      const res = await fetch('/api/kiosk/tokens', setAuthHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) }));
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Failed to generate token' }));
         alert(err.error || 'Failed to generate token');
