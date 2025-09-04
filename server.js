@@ -1333,12 +1333,8 @@ app.post('/api/bookings', async (req, res) => {
 });
 
 // Cancel a booking by ID (admin only)
-// Cancel a booking by ID (admin only).  In addition to removing the booking
-// from the system, this route now sends a cancellation email to the user
-// using the same format as the public cancel link.  The handler is async
-// so that email sending can be awaited without blocking the response.
-app.delete('/api/bookings/:id', adminAuth, async (req, res) => {
-  // Only owners, superadmins and admins can delete bookings
+app.delete('/api/bookings/:id', adminAuth, (req, res) => {
+  // Only owners and admins can delete bookings
   if (!['owner','superadmin','admin'].includes(req.adminRole)) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -1346,31 +1342,41 @@ app.delete('/api/bookings/:id', adminAuth, async (req, res) => {
   const index = bookings.findIndex(b => b.id === id);
   if (index >= 0) {
     const [removed] = bookings.splice(index, 1);
-    // Persist removal to storage
+    const space = spaces.find(s => s.id === removed.spaceId);
+    // Persist changes
+    saveData();
+    
+    // Send a cancellation email matching the public cancel link behaviour
     try {
-      await saveData();
-    } catch (err) {
-      console.error('Failed to save data after admin cancellation:', err);
-    }
-    // Send a cancellation email mirroring the /cancel/:id route.  Compose
-    // the message using formatted date/time values and the space name.
-    try {
-      const spaceName = spaces.find(s => s.id === removed.spaceId)?.name || removed.spaceId;
-      const formattedDate = formatDateMMDDYYYY(removed.date);
-      const formattedStart = formatTimeTo12H(removed.startTime);
-      const formattedEnd = formatTimeTo12H(removed.endTime);
-      const subject = 'Booking Cancelled';
+      const spaceName = (spaces.find(s => s.id === removed.spaceId) || {}).name || removed.spaceId;
+      const formattedDate = toUsDate(removed.date);
+      const formattedStart = toUsTime(removed.startTime);
+      const formattedEnd = toUsTime(removed.endTime);
+      const subject = `Booking Cancelled: ${spaceName} on ${formattedDate}`;
       const body =
-        `Hello ${removed.name},\n\n` +
-        `Your booking for ${spaceName} on ${formattedDate} from ${formattedStart} to ${formattedEnd} has been cancelled.\n\n` +
-        `Thank you.`;
-      await sendEmail(removed.email, subject, body);
+        `Hello ${removed.name},
+
+` +
+        `Your booking for ${spaceName} on ${formattedDate} from ${formattedStart} to ${formattedEnd} has been cancelled.
+
+` +
+        `If this was a mistake, you can create a new booking at any time.
+
+` +
+        `Regards,
+` +
+        `Focus Booking`;
+      // Use the same sendEmail helper as the public cancel route
+      sendEmail(removed.email, subject, body).catch(err => {
+        console.error('Error sending cancellation email (admin delete)', err);
+      });
     } catch (err) {
-      console.error('Error sending cancellation email', err);
+      console.error('Failed to send cancellation email (admin delete):', err);
     }
-    return res.json({ ok: true });
+res.json({ ok: true });
+  } else {
+    res.status(404).json({ error: 'Booking not found' });
   }
-  return res.status(404).json({ error: 'Booking not found' });
 });
 
 // Public cancellation link. Allows a user to cancel their own booking via a unique URL.
