@@ -360,6 +360,15 @@
     async function loadSpaces() {
       const res = await fetch('/api/spaces');
       const spaces = await res.json();
+          // Sort spaces by type and priority
+    const typeOrderMap = { desk: 0, office: 1, conference: 2 };
+    spaces.sort((a, b) => {
+        const typeDiff = (typeOrderMap[a.type] ?? 0) - (typeOrderMap[b.type] ?? 0);
+        if (typeDiff !== 0) return typeDiff;
+        const priorityA = (a.order ?? a.priority ?? a.priorityOrder ?? 0);
+        const priorityB = (b.order ?? b.priority ?? b.priorityOrder ?? 0);
+        return priorityA - priorityB;
+    });
       const tbody = document.querySelector('#spacesTable tbody');
       tbody.innerHTML = '';
       spaces.forEach(s => {
@@ -499,9 +508,14 @@
       await loadBookings();
     }
 
+   
+  
     async function loadAdmins() {
       const res = await fetch('/api/admins', setAuthHeaders());
       const admins = await res.json();
+          // Sort admins alphabetically by username/email
+    admins.sort((a, b) => ((a.username || '').localeCompare((b.username || ''))));
+     
       const tbody = document.querySelector('#adminsTable tbody');
       tbody.innerHTML = '';
       admins.forEach(a => {
