@@ -682,7 +682,7 @@
       // Send a DELETE request to remove a booking. After the request
       // completes, provide feedback to the admin and reload the table.
       try {
-        const res = await fetch('/api/bookings/' + id, setAuthHeaders({ method: 'DELETE' }));
+       const res = await fetch('/cancel/' + id, setAuthHeaders());
         if (res.ok) {
           alert('Booking cancelled successfully.');
         } else {
@@ -694,12 +694,15 @@
         alert('Failed to cancel booking.');
       }
       // Always reload the bookings table so the UI reflects the current state.
-      await loadBookings();
-    }
-
-    async function loadAdmins() {
+      
+      
+    
+      
+      
       const res = await fetch('/api/admins', setAuthHeaders());
       const admins = await res.json();
+        admins.sort((a, b) => (a.username || '').localeCompare((b.username || '')));
+    
       const tbody = document.querySelector('#adminsTable tbody');
       tbody.innerHTML = '';
       admins.forEach(a => {
