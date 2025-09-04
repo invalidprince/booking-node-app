@@ -330,7 +330,7 @@ async function saveData() {
             b.date,
             b.startTime,
             b.endTime,
-            b.recurring && typeof b.recurring === 'object' ? b.recurring : null,
+            getRecurring(b) && typeof getRecurring(b) === 'object' ? getRecurring(b) : null,
             b.checkInTime || null,
             b.checkOutTime || null,
             b.cancelled || false
@@ -444,7 +444,11 @@ async function loadData() {
         spaces.splice(0, spaces.length, ...data.spaces);
       }
       if (data.bookings && Array.isArray(data.bookings)) {
-        bookings.splice(0, bookings.length, ...data.bookings);
+        bookings.splice(0, bookings.length, ...data.bookings.map(b => {
+          const rec = b.recurring || b.recurrence || null;
+          const { recurrence, ...rest } = b;
+          return { ...rest, recurring: rec };
+        }));
       }
       if (data.admins && Array.isArray(data.admins)) {
         admins.splice(0, admins.length, ...data.admins);
@@ -819,6 +823,14 @@ function isRecurringOnDate(dateStr, recurring) {
   return false;
 }
 
+// Older versions of the application stored recurring bookings using the
+// property name `recurrence`.  The current version uses `recurring`.  This
+// helper normalises a booking object and returns whichever field is present
+// so that legacy data continues to behave correctly.
+function getRecurring(b) {
+  return (b && typeof b === 'object') ? (b.recurring || b.recurrence || null) : null;
+}
+
 /**
  * Convert a 24‑hour time string (HH:MM) to a 12‑hour format with AM/PM.
  *
@@ -857,7 +869,7 @@ function isSpaceAvailable(spaceId, date, startTime, endTime) {
   return !bookings.some(b => {
     if (b.spaceId !== spaceId) return false;
     // Determine if this booking occurs on the requested date
-    const occursOnDate = b.date === date || isRecurringOnDate(date, b.recurring);
+    const occursOnDate = b.date === date || isRecurringOnDate(date, getRecurring(b));
     if (!occursOnDate) return false;
     // Check for time overlap (inclusive start, exclusive end)
     const overlaps =
@@ -1140,8 +1152,8 @@ app.get('/api/bookings', adminAuth, async (req, res) => {
       date: b.date,
       startTime: b.startTime,
       endTime: b.endTime,
-      recurring: !!b.recurring,
-      recurrence: b.recurring || null,
+      recurring: !!getRecurring(b),
+      recurrence: getRecurring(b) || null,
       checkedIn: !!b.checkedIn
     };
   });
@@ -1228,7 +1240,8 @@ app.get('/api/bookings', adminAuth, async (req, res) => {
 // subsequent fetches to miss the just‑created booking.  Awaiting the save
 // ensures that the booking list remains consistent for the admin UI.
 app.post('/api/bookings', async (req, res) => {
-  const { name, email, spaceId, date, startTime, endTime, recurring } = req.body;
+  const { name, email, spaceId, date, startTime, endTime } = req.body;
+  const recurringInput = req.body.recurring || req.body.recurrence;
   if (!name || !email || !spaceId || !date || !startTime || !endTime) {
     return res.status(400).json({ error: 'Missing fields' });
   }
@@ -1274,7 +1287,7 @@ app.post('/api/bookings', async (req, res) => {
     }
   }
   // Check availability for the first occurrence of a recurring booking or single booking
-  const rec = recurring && typeof recurring === 'object' ? recurring : false;
+  const rec = recurringInput && typeof recurringInput === 'object' ? recurringInput : false;
   // If recurring, the provided date is the first occurrence. We still need
   // to ensure that date/time is free.
   if (!isSpaceAvailable(spaceId, date, startTime, endTime)) {
@@ -1602,7 +1615,7 @@ app.get('/api/bookings/today', (req, res) => {
     return res.status(403).json({ error: 'Access denied' });
   }
   const today = new Date().toISOString().slice(0, 10);
-  const result = bookings.filter(b => b.date === today || isRecurringOnDate(today, b.recurring)).map(b => {
+  const result = bookings.filter(b => b.date === today || isRecurringOnDate(today, getRecurring(b))).map(b => {
     const space = spaces.find(s => s.id === b.spaceId);
     return {
       id: b.id,
@@ -1762,7 +1775,8 @@ app.get('/api/analytics', adminAuth, (req, res) => {
       else entry.noCheckIns++;
     }
     // For recurring bookings, iterate through occurrences within range
-    if (b.recurring && typeof b.recurring === 'object') {
+    const rec = getRecurring(b);
+    if (rec && typeof rec === 'object') {
       // Start at either booking.date or startDate, whichever is later
       const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
       const endIter = new Date(endDate);
@@ -1773,7 +1787,7 @@ app.get('/api/analytics', adminAuth, (req, res) => {
       while (currentDate <= endIter) {
         const dateStr = currentDate.toISOString().slice(0, 10);
         // Only consider dates on or after the first booking date
-        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, rec)) {
           processOccurrence(dateStr);
         }
         currentDate.setDate(currentDate.getDate() + 1);
@@ -1887,7 +1901,8 @@ app.get('/api/analytics-summary', adminAuth, (req, res) => {
       }
       totalBookedMinutes += diff;
     }
-    if (b.recurring && typeof b.recurring === 'object') {
+    const rec = getRecurring(b);
+    if (rec && typeof rec === 'object') {
       const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
       const endIter = new Date(endDate);
       startIter.setHours(0,0,0,0);
@@ -1895,7 +1910,7 @@ app.get('/api/analytics-summary', adminAuth, (req, res) => {
       const currentDate = new Date(startIter);
       while (currentDate <= endIter) {
         const dateStr = currentDate.toISOString().slice(0,10);
-        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, rec)) {
           processOccurrence(dateStr);
         }
         currentDate.setDate(currentDate.getDate() + 1);
@@ -2012,7 +2027,8 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
       ];
       rows.push(row.map(escapeCsv).join(','));
     }
-    if (b.recurring && typeof b.recurring === 'object') {
+    const rec = getRecurring(b);
+    if (rec && typeof rec === 'object') {
       // Generate occurrences for recurring bookings within the range
       const startIter = new Date(b.date > startDate.toISOString().slice(0,10) ? b.date : startDate.toISOString().slice(0,10));
       const endIter = new Date(endDate);
@@ -2021,7 +2037,7 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
       const currentDate = new Date(startIter);
       while (currentDate <= endIter) {
         const dateStr = currentDate.toISOString().slice(0,10);
-        if (dateStr >= b.date && isRecurringOnDate(dateStr, b.recurring)) {
+        if (dateStr >= b.date && isRecurringOnDate(dateStr, rec)) {
           processOccurrence(dateStr);
         }
         currentDate.setDate(currentDate.getDate() + 1);
