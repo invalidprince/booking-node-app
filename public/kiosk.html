@@ -112,21 +112,38 @@
         const spaces = await res.json();
         const select = document.getElementById('space');
         select.innerHTML = '';
-        // Auto-book options
+        // Auto-book options shown first so users can quickly find a space.
         const autoDesk = document.createElement('option');
         autoDesk.value = 'auto-desk';
         autoDesk.textContent = 'Auto book Desk';
         select.appendChild(autoDesk);
-        const autoOffice = document.createElement('option');
-        autoOffice.value = 'auto-office';
-        autoOffice.textContent = 'Auto book Office';
-        select.appendChild(autoOffice);
-        spaces.forEach(space => {
-          const opt = document.createElement('option');
-          opt.value = space.id;
-          opt.textContent = space.name;
-          select.appendChild(opt);
-        });
+        const autoConference = document.createElement('option');
+        autoConference.value = 'auto-conference';
+        autoConference.textContent = 'Auto book Conference Room';
+        select.appendChild(autoConference);
+        /*
+         * Sort the remaining spaces to mirror the main booking page.  We
+         * list desks first, then offices, then conference rooms, each ordered
+         * by their priorityOrder (ascending).  Spaces without a priorityOrder
+         * are treated as lowest priority within their group.
+         */
+        const typeOrder = { desk: 1, office: 2, conference: 3 };
+        spaces
+          .slice()
+          .sort((a, b) => {
+            const aType = typeOrder[a.type] || 999;
+            const bType = typeOrder[b.type] || 999;
+            if (aType !== bType) return aType - bType;
+            const aPrio = a.priorityOrder || 0;
+            const bPrio = b.priorityOrder || 0;
+            return aPrio - bPrio;
+          })
+          .forEach(space => {
+            const opt = document.createElement('option');
+            opt.value = space.id;
+            opt.textContent = space.name;
+            select.appendChild(opt);
+          });
       } catch (err) {
         console.error(err);
       }
@@ -138,12 +155,28 @@
         const data = await res.json();
         const sel = document.getElementById('avSpace');
         sel.innerHTML = '';
-        data.forEach(space => {
-          const opt = document.createElement('option');
-          opt.value = space.id;
-          opt.textContent = space.name;
-          sel.appendChild(opt);
-        });
+        /*
+         * Sort the availability dropdown identically to the booking dropdown,
+         * but without auto‑booking options.  Desks appear first, followed by
+         * offices and conference rooms, each ordered by priorityOrder.
+         */
+        const typeOrder = { desk: 1, office: 2, conference: 3 };
+        data
+          .slice()
+          .sort((a, b) => {
+            const aType = typeOrder[a.type] || 999;
+            const bType = typeOrder[b.type] || 999;
+            if (aType !== bType) return aType - bType;
+            const aPrio = a.priorityOrder || 0;
+            const bPrio = b.priorityOrder || 0;
+            return aPrio - bPrio;
+          })
+          .forEach(space => {
+            const opt = document.createElement('option');
+            opt.value = space.id;
+            opt.textContent = space.name;
+            sel.appendChild(opt);
+          });
       } catch (err) {
         console.error(err);
       }
@@ -281,7 +314,13 @@
       const endTime = convertTo24h(endRaw);
       try {
         if (spaceVal.startsWith('auto-')) {
-          const type = spaceVal === 'auto-desk' ? 'desk' : 'office';
+          // Map auto options to their corresponding space types.  Default to
+          // 'office' for any unrecognised auto option to maintain backward
+          // compatibility.
+          let type;
+          if (spaceVal === 'auto-desk') type = 'desk';
+          else if (spaceVal === 'auto-conference') type = 'conference';
+          else type = 'office';
           const params = new URLSearchParams({ type, date, start: startTime, end: endTime, name, email });
           const res = await fetch('/api/bookings/auto?' + params.toString());
           if (res.ok) {
