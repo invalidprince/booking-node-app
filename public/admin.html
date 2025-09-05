@@ -93,6 +93,9 @@
         <div>
           <strong>Bookings</strong>
           <input id="bookingFilter" placeholder="Filter" style="margin-left:8px;">
+          <label style="margin-left:8px;font-size:14px;">
+            <input type="checkbox" id="showPastBookings"> Show past
+          </label>
         </div>
         <div>
           <button id="prevPageBtn">&lt; Prev</button>
@@ -554,6 +557,28 @@
       let _bookingsData = [];
       let _bookingsFilter = '';
       let _bookingsSort = { key: 'date', dir: -1 };
+      let _showPastBookings = false;
+
+      function getNowEastern(){
+        const now = new Date();
+        const fmt = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'America/New_York',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
+        });
+        const parts = fmt.formatToParts(now).reduce((acc, p) => {
+          if (p.type !== 'literal') acc[p.type] = p.value;
+          return acc;
+        }, {});
+        return {
+          date: `${parts.year}-${parts.month}-${parts.day}`,
+          time: `${parts.hour}:${parts.minute}`
+        };
+      }
 
       async function refreshBookings() {
         try {
@@ -575,6 +600,15 @@
             (b.email || '').toLowerCase().includes(f) ||
             (b.spaceName || '').toLowerCase().includes(f)
           );
+        }
+
+        if (!_showPastBookings) {
+          const now = getNowEastern();
+          items = items.filter(b => {
+            if (b.date > now.date) return true;
+            if (b.date === now.date && (b.endTime || '00:00') >= now.time) return true;
+            return false;
+          });
         }
 
         items.sort((a, b) => {
@@ -626,6 +660,13 @@
         if (filter) {
           filter.addEventListener('input', (e) => {
             _bookingsFilter = e.target.value;
+            renderBookingsTable();
+          });
+        }
+        const pastChk = document.getElementById('showPastBookings');
+        if (pastChk) {
+          pastChk.addEventListener('change', (e) => {
+            _showPastBookings = e.target.checked;
             renderBookingsTable();
           });
         }
