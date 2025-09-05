@@ -34,7 +34,12 @@
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
-  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div></div><div class="card">
+  <div id="app" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div><button id="logoutBtn">Logout</button></div>
+      <div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div>
+    </div>
+    <div class="card">
       <h2>Display Settings</h2>
       <div class="row">
         <label for="timezoneSelect">Time Zone:</label>
@@ -46,9 +51,10 @@
         </select>
         <label for="pageSizeSetting">Bookings per page:</label>
         <input id="pageSizeSetting" type="number" min="1" value="20" style="width:60px;">
-        <button id="saveSettingsBtn">Save Settings</button>
+        <button id="saveSettingsBtn" type="button">Save Settings</button>
       </div>
-    </div><div class="card">
+    </div>
+    <div class="card">
       <h2>Spaces</h2>
       <div class="row">
         <input id="spaceName" placeholder="Name">
@@ -179,17 +185,17 @@
     }
 
     function loadDisplaySettings() {
-      const tzSel = document.getElementById('timezoneSelect');
-      if (tzSel) tzSel.value = localStorage.getItem('adminTimezone') || 'UTC';
-      const pageInput = document.getElementById('pageSizeSetting');
-      if (pageInput) pageInput.value = localStorage.getItem('bookingsPageSize') || '20';
+      const tz = document.getElementById('timezoneSelect');
+      if (tz) tz.value = localStorage.getItem('adminTimezone') || 'UTC';
+      const page = document.getElementById('pageSizeSetting');
+      if (page) page.value = localStorage.getItem('bookingsPageSize') || '20';
     }
 
     function saveDisplaySettings() {
-      const tzSel = document.getElementById('timezoneSelect');
-      const pageInput = document.getElementById('pageSizeSetting');
-      if (tzSel) localStorage.setItem('adminTimezone', tzSel.value);
-      if (pageInput) localStorage.setItem('bookingsPageSize', pageInput.value || '20');
+      const tz = document.getElementById('timezoneSelect');
+      const page = document.getElementById('pageSizeSetting');
+      if (tz) localStorage.setItem('adminTimezone', tz.value);
+      if (page) localStorage.setItem('bookingsPageSize', page.value || '20');
       alert('Settings saved');
     }
 
@@ -241,8 +247,7 @@
           document.getElementById('app').classList.remove('hidden');
           updateSettingsLinkIfNeeded();
           ensureSuperAdminIfNeeded();
-          updateSettingsLinkIfNeeded();
-          ensureSuperAdminIfNeeded();
+          loadDisplaySettings();
           await refreshAll();
         } else {
           if (res.status === 401) status.textContent = data.error || 'Invalid credentials';
@@ -818,7 +823,6 @@
     document.addEventListener('DOMContentLoaded', () => {
       updateSettingsLinkIfNeeded();
       ensureSuperAdminIfNeeded();
-      loadDisplaySettings();
       // Safe bindings
       (function(){
         function on(id, event, handler){
@@ -834,23 +838,14 @@
         on('loadAnalyticsBtn','click', loadAnalytics);
         on('loadSummaryBtn','click', loadSummary);
         on('downloadCsvBtn','click', downloadCsv);
+        on('saveSettingsBtn', 'click', saveDisplaySettings);
       })();
 
       updateSettingsLinkIfNeeded();
       ensureSuperAdminIfNeeded();
-      on('loginBtn','click', login);
-      on('logoutBtn','click', logout);
-      on('addSpaceBtn','click', addSpace);
-      on('addAdminBtn','click', addAdmin);
-      on('generateKioskBtn','click', generateKioskToken);
-      on('addBookingBtn','click', addBooking);
-      on('loadAnalyticsBtn','click', loadAnalytics);
-      on('loadSummaryBtn','click', loadSummary);
-      on('downloadCsvBtn','click', downloadCsv);
-      on('saveSettingsBtn','click', saveDisplaySettings);
-
-      // Global error banner
-      window.addEventListener('error', (e) => {
+      loadDisplaySettings();
+        // Global error banner
+        window.addEventListener('error', (e) => {
         const div = document.getElementById('loginStatus');
         if (div && !div.textContent) {
           div.textContent = 'Script error: ' + (e.message || e.error || 'Unknown error');
