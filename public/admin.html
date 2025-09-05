@@ -90,7 +90,10 @@
       </div>
       <div class="row" style="justify-content: space-between; align-items: center; margin: 8px 0;">
         <!-- Update heading to reflect that we now load all bookings (not just upcoming) -->
-        <div><strong>Bookings</strong></div>
+        <div>
+          <strong>Bookings</strong>
+          <input id="bookingFilter" placeholder="Filter" style="margin-left:8px;">
+        </div>
         <div>
           <button id="prevPageBtn">&lt; Prev</button>
           <span id="pageInfo" style="margin:0 8px;"></span>
@@ -99,7 +102,16 @@
       </div>
       <table id="bookingsTable">
         <thead>
-          <tr><th>Name</th><th>Email</th><th>Space</th><th>Date</th><th>Start</th><th>End</th><th>Recurring</th><th>Action</th></tr>
+          <tr>
+            <th data-sort="name">Name</th>
+            <th data-sort="email">Email</th>
+            <th data-sort="spaceName">Space</th>
+            <th data-sort="date">Date</th>
+            <th data-sort="startTime">Start</th>
+            <th data-sort="endTime">End</th>
+            <th data-sort="recurring">Recurring</th>
+            <th>Action</th>
+          </tr>
         </thead>
         <tbody></tbody>
       </table>
@@ -539,27 +551,40 @@
       await loadSpaces();
     }
 
-    async function loadBookings() {
-      if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
-      const { offset, limit } = window._pageState;
-      // Fetch all bookings from the server.
-      return fetch('/api/bookings', setAuthHeaders())
-        .then(r => r.json())
-        .then(data => {
-          const items = Array.isArray(data) ? data : (data.items || []);
-          items.sort((a, b) => {
-            const dateA = a.date || '';
-            const dateB = b.date || '';
-            const cmpDate = dateB.localeCompare(dateA);
-            if (cmpDate !== 0) return cmpDate;
-            const startA = a.startTime || '';
-            const startB = b.startTime || '';
-            return (startB || '').localeCompare(startA || '');
-          });
-          const total = items.length;
-          window._pageState.total = total;
+      let _bookingsData = [];
+      let _bookingsFilter = '';
+      let _bookingsSort = { key: 'date', dir: -1 };
 
-          const tbody = document.querySelector('#bookingsTable tbody');
+      async function refreshBookings() {
+        try {
+          const res = await fetch('/api/bookings', setAuthHeaders());
+          const data = await res.json();
+          _bookingsData = Array.isArray(data) ? data : (data.items || []);
+          renderBookingsTable();
+        } catch (e) {
+          console.error('refreshBookings error', e);
+        }
+      }
+
+      function renderBookingsTable() {
+        let items = _bookingsData.slice();
+        if (_bookingsFilter) {
+          const f = _bookingsFilter.toLowerCase();
+          items = items.filter(b =>
+            (b.name || '').toLowerCase().includes(f) ||
+            (b.email || '').toLowerCase().includes(f) ||
+            (b.spaceName || '').toLowerCase().includes(f)
+          );
+        }
+
+        items.sort((a, b) => {
+          let va = a[_bookingsSort.key] || '';
+          let vb = b[_bookingsSort.key] || '';
+          return _bookingsSort.dir * va.localeCompare(vb);
+        });
+
+        const tbody = document.querySelector('#bookingsTable tbody');
+        if (tbody) {
           tbody.innerHTML = '';
           items.forEach(b => {
             const tr = document.createElement('tr');
@@ -567,8 +592,8 @@
             const end12 = to12Hour(b.endTime);
             const dateFormatted = formatDateWithDay(b.date);
             const recurrenceDesc = formatRecurrence(b.recurrence);
-            tr.innerHTML = 
-`<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
+            tr.innerHTML =
+              `<td>${b.name}</td><td>${b.email}</td><td>${b.spaceName}</td>` +
               `<td>${dateFormatted}</td>` +
               `<td>${start12}</td>` +
               `<td>${end12}</td>` +
@@ -576,15 +601,47 @@
               `<td><button data-id="${b.id}" class="delBooking">Cancel</button></td>`;
             tbody.appendChild(tr);
           });
+        }
 
-          const start = total === 0 ? 0 : 1;
-          const end = total;
-          document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
+        const total = items.length;
+        const start = total === 0 ? 0 : 1;
+        const end = total;
+        const pageInfo = document.getElementById('pageInfo');
+        if (pageInfo) pageInfo.textContent = `${start}-${end} of ${total}`;
 
-          document.getElementById('prevPageBtn').disabled = true;
-          document.getElementById('nextPageBtn').disabled = true;
+        const prev = document.getElementById('prevPageBtn');
+        const next = document.getElementById('nextPageBtn');
+        if (prev) prev.disabled = true;
+        if (next) next.disabled = true;
+      }
+
+      async function loadBookings() {
+        await refreshBookings();
+        if (window._bookingsInterval) clearInterval(window._bookingsInterval);
+        window._bookingsInterval = setInterval(refreshBookings, 30000);
+      }
+
+      function initDynamicBookings() {
+        const filter = document.getElementById('bookingFilter');
+        if (filter) {
+          filter.addEventListener('input', (e) => {
+            _bookingsFilter = e.target.value;
+            renderBookingsTable();
+          });
+        }
+        document.querySelectorAll('#bookingsTable th[data-sort]').forEach(th => {
+          th.style.cursor = 'pointer';
+          th.addEventListener('click', () => {
+            const key = th.dataset.sort;
+            if (_bookingsSort.key === key) {
+              _bookingsSort.dir *= -1;
+            } else {
+              _bookingsSort = { key, dir: 1 };
+            }
+            renderBookingsTable();
+          });
         });
-    }
+      }
 
     // NEW: proper async addBooking implementation (fixes stray awaits)
     async function addBooking() {
@@ -934,9 +991,10 @@
     }
 
     // One-time DOM wiring
-    document.addEventListener('DOMContentLoaded', () => {
-      updateSettingsLinkIfNeeded();
-      ensureSuperAdminIfNeeded();
+      document.addEventListener('DOMContentLoaded', () => {
+        updateSettingsLinkIfNeeded();
+        ensureSuperAdminIfNeeded();
+        initDynamicBookings();
       // Safe bindings
       (function(){
         function on(id, event, handler){
