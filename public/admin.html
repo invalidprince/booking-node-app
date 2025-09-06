@@ -617,10 +617,17 @@
           return _bookingsSort.dir * va.localeCompare(vb);
         });
 
+        // Initialise pagination state with a 15 item page size
+        if (!window._pageState) window._pageState = { offset: 0, limit: 15, total: 0 };
+        const ps = window._pageState;
+        ps.total = items.length;
+        if (ps.offset >= ps.total) ps.offset = Math.max(0, ps.total - ps.limit);
+        const paged = items.slice(ps.offset, ps.offset + ps.limit);
+
         const tbody = document.querySelector('#bookingsTable tbody');
         if (tbody) {
           tbody.innerHTML = '';
-          items.forEach(b => {
+          paged.forEach(b => {
             const tr = document.createElement('tr');
             const start12 = to12Hour(b.startTime);
             const end12 = to12Hour(b.endTime);
@@ -637,16 +644,16 @@
           });
         }
 
-        const total = items.length;
-        const start = total === 0 ? 0 : 1;
-        const end = total;
+        const total = ps.total;
+        const start = total === 0 ? 0 : ps.offset + 1;
+        const end = Math.min(total, ps.offset + ps.limit);
         const pageInfo = document.getElementById('pageInfo');
         if (pageInfo) pageInfo.textContent = `${start}-${end} of ${total}`;
 
         const prev = document.getElementById('prevPageBtn');
         const next = document.getElementById('nextPageBtn');
-        if (prev) prev.disabled = true;
-        if (next) next.disabled = true;
+        if (prev) prev.disabled = ps.offset <= 0;
+        if (next) next.disabled = ps.offset + ps.limit >= total;
       }
 
       async function loadBookings() {
@@ -660,6 +667,7 @@
         if (filter) {
           filter.addEventListener('input', (e) => {
             _bookingsFilter = e.target.value;
+            if (window._pageState) window._pageState.offset = 0;
             renderBookingsTable();
           });
         }
@@ -667,6 +675,7 @@
         if (pastChk) {
           pastChk.addEventListener('change', (e) => {
             _showPastBookings = e.target.checked;
+            if (window._pageState) window._pageState.offset = 0;
             renderBookingsTable();
           });
         }
@@ -679,6 +688,7 @@
             } else {
               _bookingsSort = { key, dir: 1 };
             }
+            if (window._pageState) window._pageState.offset = 0;
             renderBookingsTable();
           });
         });
@@ -1083,17 +1093,17 @@
       const nextBtn = document.getElementById('nextPageBtn');
       if (prevBtn && nextBtn) {
         prevBtn.addEventListener('click', () => {
-          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          if (!window._pageState) window._pageState = { offset: 0, limit: 15, total: 0 };
           const ps = window._pageState;
           ps.offset = Math.max(0, ps.offset - ps.limit);
-          loadBookings();
+          renderBookingsTable();
         });
         nextBtn.addEventListener('click', () => {
-          if (!window._pageState) window._pageState = { offset: 0, limit: 50, total: 0 };
+          if (!window._pageState) window._pageState = { offset: 0, limit: 15, total: 0 };
           const ps = window._pageState;
           if (ps.offset + ps.limit < ps.total) {
             ps.offset = ps.offset + ps.limit;
-            loadBookings();
+            renderBookingsTable();
           }
         });
       }
