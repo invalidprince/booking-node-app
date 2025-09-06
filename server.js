@@ -363,6 +363,7 @@ async function saveData() {
       try {
         await db.query('ROLLBACK');
       } catch (_) {}
+      throw err;
     }
   }
 }
@@ -1073,7 +1074,7 @@ app.post('/api/reset-password', (req, res) => {
     if (admin.password) delete admin.password;
     // Persist the updated admins and remove the used token
     delete passwordResetTokens[token];
-    saveData();
+    saveData().catch(err => console.error('Failed to save data:', err));
     return res.json({ ok: true });
   } catch (err) {
     console.error('reset-password error', err);
@@ -1099,7 +1100,7 @@ app.post('/api/spaces', adminAuth, (req, res) => {
   const id = uuidv4();
   spaces.push({ id, name, type, priorityOrder: Number(priorityOrder) });
   // Persist changes
-  saveData();
+  saveData().catch(err => console.error('Failed to save data:', err));
   res.json({ id });
 });
 
@@ -1113,7 +1114,7 @@ app.delete('/api/spaces/:id', adminAuth, (req, res) => {
   const index = spaces.findIndex(r => r.id === id);
   if (index >= 0) {
     spaces.splice(index, 1);
-    saveData();
+    saveData().catch(err => console.error('Failed to save data:', err));
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Space not found' });
@@ -1370,8 +1371,8 @@ app.delete('/api/bookings/:id', adminAuth, (req, res) => {
     const [removed] = bookings.splice(index, 1);
     const space = spaces.find(s => s.id === removed.spaceId);
     // Persist changes
-    saveData();
-    
+    saveData().catch(err => console.error('Failed to save data:', err));
+
     // Send a cancellation email matching the public cancel link behaviour
     try {
       const spaceName = (spaces.find(s => s.id === removed.spaceId) || {}).name || removed.spaceId;
@@ -1515,7 +1516,7 @@ app.get('/api/bookings/auto', (req, res) => {
         };
         bookings.push(booking);
         // Persist immediately so that cancellation link works even if the process restarts
-        try { saveData(); } catch (err) { console.error('Error saving data', err); }
+        saveData().catch(err => console.error('Error saving data', err));
         // Send booking confirmation email asynchronously
         (async () => {
           try {
@@ -1577,7 +1578,7 @@ app.post('/api/admins', adminAuth, (req, res) => {
   const creds = hashPassword(password);
   const id = uuidv4();
   admins.push({ id, username, passwordHash: creds.hash, salt: creds.salt, role: roleNormalized });
-  saveData();
+  saveData().catch(err => console.error('Failed to save data:', err));
   res.json({ id });
 });
 
@@ -1599,7 +1600,7 @@ app.delete('/api/admins/:id', adminAuth, (req, res) => {
       }
     }
     admins.splice(index, 1);
-    saveData();
+    saveData().catch(err => console.error('Failed to save data:', err));
     res.json({ ok: true });
   } else {
     res.status(404).json({ error: 'Admin not found' });
@@ -2105,7 +2106,7 @@ app.post('/api/kiosk/tokens', adminAuth, async (req, res) => {
 // revoked any devices using it will lose access on their next request. This
 // does not remove the cookie from the client; instead the server simply
 // stops recognising the token.
-app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
+app.delete('/api/kiosk/tokens/:id', adminAuth, async (req, res) => {
   // Allow superadmins to revoke kiosk tokens.  Without this, superadmins
   // could not perform deletions in the admin settings page.
   if (!['owner', 'admin', 'superadmin'].includes(req.adminRole)) {
@@ -2117,7 +2118,12 @@ app.delete('/api/kiosk/tokens/:id', adminAuth, (req, res) => {
     return res.status(404).json({ error: 'Token not found' });
   }
   kioskTokens.splice(index, 1);
-  saveData();
+  try {
+    await saveData();
+  } catch (err) {
+    console.error('Failed to persist kiosk token deletion:', err);
+    return res.status(500).json({ error: 'Failed to save token' });
+  }
   res.json({ ok: true });
 });
 
@@ -2206,7 +2212,7 @@ app.get('/verify-email/:token', (req, res) => {
   // Add email to verified list if not present
   if (!verifiedEmails.includes(email)) {
     verifiedEmails.push(email);
-    saveData();
+    saveData().catch(err => console.error('Failed to save data:', err));
   }
   // Remove the token so it cannot be reused
   delete verificationTokens[token];
@@ -2286,7 +2292,7 @@ app.post('/api/bootstrap-admin', async (req, res) => {
       const adminRow = { id: (dbRow?.id || id), username, passwordHash: hash, salt, role: adminRole };
       if (i >= 0) admins[i] = adminRow; else admins.push(adminRow);
       // Persist JSON snapshot as well
-      try { saveData(); } catch (_) {}
+      saveData().catch(() => {});
     }
 
     const responseAdmin = dbRow ? dbRow : { id: id, username, role: adminRole };
