@@ -618,6 +618,10 @@
           items = items.filter(b => {
             if (b.date > now.date) return true;
             if (b.date === now.date && (b.endTime || '00:00') >= now.time) return true;
+            // Recurring bookings may have a start date in the past but still
+            // represent future occurrences. Treat them as upcoming so they
+            // remain visible in the table even when past bookings are hidden.
+            if (b.recurring || b.recurrence) return true;
             return false;
           });
         }
