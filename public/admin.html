@@ -595,11 +595,22 @@
         let items = _bookingsData.slice();
         if (_bookingsFilter) {
           const f = _bookingsFilter.toLowerCase();
-          items = items.filter(b =>
-            (b.name || '').toLowerCase().includes(f) ||
-            (b.email || '').toLowerCase().includes(f) ||
-            (b.spaceName || '').toLowerCase().includes(f)
-          );
+          items = items.filter(b => {
+            const dateStr = formatDateWithDay(b.date).toLowerCase();
+            const start12 = to12Hour(b.startTime).toLowerCase();
+            const end12 = to12Hour(b.endTime).toLowerCase();
+            return (
+              (b.name || '').toLowerCase().includes(f) ||
+              (b.email || '').toLowerCase().includes(f) ||
+              (b.spaceName || '').toLowerCase().includes(f) ||
+              (b.date || '').toLowerCase().includes(f) ||
+              dateStr.includes(f) ||
+              (b.startTime || '').toLowerCase().includes(f) ||
+              (b.endTime || '').toLowerCase().includes(f) ||
+              start12.includes(f) ||
+              end12.includes(f)
+            );
+          });
         }
 
         if (!_showPastBookings) {
