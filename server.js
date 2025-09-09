@@ -814,6 +814,7 @@ async function sendBookingReminderEmail(
     console.error('Error sending booking reminder', err);
   }
 }
+exports.sendBookingReminderEmail = sendBookingReminderEmail;
 
 // Interval in milliseconds to check for upcoming bookings and send
 // reminder emails. One hour strikes a balance between timeliness and
@@ -830,20 +831,30 @@ async function checkAndSendReminders() {
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   const tomorrowStr = tomorrow.toISOString().slice(0, 10);
   for (const b of bookings) {
-    if (b.cancelled || remindedBookings.has(b.id)) continue;
-    if (b.date === tomorrowStr) {
+    const reminderKey = `${b.id}|${tomorrowStr}`;
+    if (b.cancelled || remindedBookings.has(reminderKey)) continue;
+    if (b.date === tomorrowStr || isRecurringOnDate(tomorrowStr, getRecurring(b))) {
       const spaceName = spaces.find(s => s.id === b.spaceId)?.name || b.spaceId;
       const baseUrl = APP_BASE_URL || 'http://localhost:5050';
       const cancelLink = `${baseUrl}/cancel/${b.id}`;
       try {
-        await sendBookingReminderEmail(b.name, b.email, spaceName, b.date, b.startTime, b.endTime, cancelLink);
-        remindedBookings.add(b.id);
+        await exports.sendBookingReminderEmail(
+          b.name,
+          b.email,
+          spaceName,
+          tomorrowStr,
+          b.startTime,
+          b.endTime,
+          cancelLink
+        );
+        remindedBookings.add(reminderKey);
       } catch (err) {
         console.error('Failed to send reminder for booking', b.id, err);
       }
     }
   }
 }
+exports.checkAndSendReminders = checkAndSendReminders;
 
 /**
  * Start the periodic reminder service.
@@ -2327,6 +2338,7 @@ app.get('/verify-email/:token', (req, res) => {
 // database operations are asynchronous we perform them in an immediately
 // invoked async function.  If any of the setup steps fail the error is
 // logged and the server will still start with the in‑memory defaults.
+if (process.env.NODE_ENV !== 'test') {
 (async () => {
   try {
     await initDb();
@@ -2417,3 +2429,11 @@ app.listen(PORT, () => {
     console.log(`Booking app listening at http://localhost:${PORT}`);
   });
 })();
+}
+
+// Export for testing
+exports.isRecurringOnDate = isRecurringOnDate;
+exports.getRecurring = getRecurring;
+exports.bookings = bookings;
+exports.spaces = spaces;
+exports.remindedBookings = remindedBookings;
