@@ -532,6 +532,13 @@ const spaces = [
 //   recurrence patterns.
 const bookings = [];
 
+// Track bookings that have already received a reminder to avoid
+// sending duplicate reminders if the service runs multiple times in a
+// day or the server remains up for an extended period. This state is
+// kept in memory only to keep the implementation lightweight and avoid
+// any changes to the existing data model or persistence layer.
+const remindedBookings = new Set();
+
 // Admin accounts used to access the admin portal.  The first admin is
 // designated as the owner and uses a hashed password.  Additional admins
 // created via the API will also store hashed credentials.  Note: legacy
@@ -763,6 +770,90 @@ async function sendBookingConfirmationEmail(
     const label = context ? ` (${context})` : '';
     console.error('Error sending booking confirmation' + label, err);
   }
+}
+
+/**
+ * Send a reminder email one day before a booking. The reminder includes
+ * the same booking details as the confirmation along with a cancel link
+ * so the user can easily cancel if necessary. This uses the existing
+ * sendEmail helper to avoid any changes to the way emails are delivered.
+ *
+ * @param {string} name      Name of the user who made the booking
+ * @param {string} email     Recipient email address
+ * @param {string} space     Human friendly name of the booked space
+ * @param {string} date      Booking date (YYYY-MM-DD)
+ * @param {string} start     Start time (HH:MM)
+ * @param {string} end       End time (HH:MM)
+ * @param {string} cancelLink Full URL allowing the user to cancel
+ */
+async function sendBookingReminderEmail(
+  name,
+  email,
+  space,
+  date,
+  start,
+  end,
+  cancelLink
+) {
+  const formattedDate = formatDateMMDDYYYY(date);
+  const formattedStart = formatTimeTo12H(start);
+  const formattedEnd = formatTimeTo12H(end);
+  const emailText =
+    `Hello ${name},\n\n` +
+    `This is a friendly reminder for your upcoming booking tomorrow.\n\n` +
+    `Space: ${space}\n` +
+    `Date: ${formattedDate}\n` +
+    `Start Time: ${formattedStart}\n` +
+    `End Time: ${formattedEnd}\n\n` +
+    `If you need to cancel your booking, please click the link below:\n` +
+    `${cancelLink}\n\n` +
+    `Thank you.`;
+  try {
+    await sendEmail(email, 'Booking Reminder', emailText);
+  } catch (err) {
+    console.error('Error sending booking reminder', err);
+  }
+}
+
+// Interval in milliseconds to check for upcoming bookings and send
+// reminder emails. One hour strikes a balance between timeliness and
+// resource usage.
+const REMINDER_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Iterate over bookings and send reminder emails for any bookings
+ * scheduled for the following day. Uses an in-memory Set to ensure each
+ * booking only receives a single reminder per process lifetime.
+ */
+async function checkAndSendReminders() {
+  const now = new Date();
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+  for (const b of bookings) {
+    if (b.cancelled || remindedBookings.has(b.id)) continue;
+    if (b.date === tomorrowStr) {
+      const spaceName = spaces.find(s => s.id === b.spaceId)?.name || b.spaceId;
+      const baseUrl = APP_BASE_URL || 'http://localhost:5050';
+      const cancelLink = `${baseUrl}/cancel/${b.id}`;
+      try {
+        await sendBookingReminderEmail(b.name, b.email, spaceName, b.date, b.startTime, b.endTime, cancelLink);
+        remindedBookings.add(b.id);
+      } catch (err) {
+        console.error('Failed to send reminder for booking', b.id, err);
+      }
+    }
+  }
+}
+
+/**
+ * Start the periodic reminder service.
+ */
+function startReminderService() {
+  // Run once on startup then at regular intervals.
+  checkAndSendReminders().catch(err => console.error('Reminder check failed', err));
+  setInterval(() => {
+    checkAndSendReminders().catch(err => console.error('Reminder check failed', err));
+  }, REMINDER_CHECK_INTERVAL_MS);
 }
 
 /**
@@ -2240,6 +2331,9 @@ app.get('/verify-email/:token', (req, res) => {
   try {
     await initDb();
     await loadData();
+    // Begin background reminder service after data is loaded so existing
+    // bookings are considered for reminders.
+    startReminderService();
   } catch (err) {
     console.error('Initialisation error:', err);
   }
