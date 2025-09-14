@@ -404,6 +404,7 @@ async function loadData() {
         recurring: r.recurring || null,
         checkInTime: r.checkInTime || null,
         checkOutTime: r.checkOutTime || null,
+        checkedIn: !!r.checkInTime,
         cancelled: r.cancelled || false
       })));
       // Load admins from the database
@@ -2138,7 +2139,7 @@ app.get('/api/analytics-export', adminAuth, (req, res) => {
         spaceName,
         b.startTime,
         b.endTime,
-        b.checkedIn ? 'Yes' : 'No'
+        b.checkInTime ? 'Yes' : 'No'
       ];
       rows.push(row.map(escapeCsv).join(','));
     }
