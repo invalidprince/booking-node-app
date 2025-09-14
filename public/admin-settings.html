@@ -34,7 +34,31 @@
     </div>
     <div id="loginStatus" style="color:#b00;margin-top:8px;"></div>
   </div>
-  <div id="app" class="hidden"><div class="card" style="display:flex;justify-content:space-between;align-items:center;"><div><button id="logoutBtn">Logout</button></div><div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div></div><div class="card">
+  <div id="app" class="hidden">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div><button id="logoutBtn">Logout</button></div>
+      <div id="rightActions"><a href="/admin.html" style="text-decoration:none;font-size:14px;">← Back to Dashboard</a></div>
+    </div>
+    <div class="card">
+      <h2>General Settings</h2>
+      <div class="row">
+        <label for="timeZone">Time Zone</label>
+        <select id="timeZone">
+          <option value="UTC">UTC</option>
+          <option value="America/New_York">America/New_York</option>
+          <option value="America/Los_Angeles">America/Los_Angeles</option>
+          <option value="Europe/London">Europe/London</option>
+          <option value="Europe/Paris">Europe/Paris</option>
+          <option value="Asia/Tokyo">Asia/Tokyo</option>
+          <option value="Australia/Sydney">Australia/Sydney</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="resultsPerPage">Results per page</label>
+        <input id="resultsPerPage" type="number" value="10" min="1" max="50">
+      </div>
+    </div>
+    <div class="card">
       <h2>Spaces</h2>
       <div class="row">
         <input id="spaceName" placeholder="Name">
