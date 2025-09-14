@@ -308,9 +308,10 @@ async function saveData() {
   if (db) {
     try {
       await db.query('BEGIN');
-      // Clear all tables
-      await db.query('DELETE FROM spaces');
+      // Clear all tables.  Delete from bookings before spaces to avoid
+      // foreign key violations in environments where a constraint exists.
       await db.query('DELETE FROM bookings');
+      await db.query('DELETE FROM spaces');
       await db.query('DELETE FROM admins');
       await db.query('DELETE FROM "verifiedEmails"');
       await db.query('DELETE FROM "kioskTokens"');
@@ -1415,26 +1416,25 @@ app.post('/api/bookings', async (req, res) => {
     checkedIn: false
   };
   bookings.push(booking);
-  // Persist changes.  Await the promise so that the booking is fully
-  // committed to the database (or JSON file) before responding.  If
-  // persistence fails we log the error but still proceed so the booking
-  // exists in memory and the client receives a response.
+  // Persist changes. Await the promise so the booking is fully
+  // committed to the database (or JSON file) before responding. If
+  // persistence fails, surface the error so the client is aware that
+  // the booking was not saved.
   try {
     await saveData();
+    // After saving, reload the in‑memory state from the database (if
+    // configured). This ensures that subsequent queries see the
+    // freshest data. Errors during reload are logged but non‑fatal.
+    if (db) {
+      try {
+        await loadData();
+      } catch (err) {
+        console.error('Error reloading data after booking', err);
+      }
+    }
   } catch (err) {
     console.error('Error saving new booking', err);
-  }
-  // After saving, reload the in‑memory state from the database (if
-  // configured).  This ensures that a subsequent call to list
-  // bookings reflects the most up‑to‑date data, avoiding a race
-  // condition where the new booking may not yet appear.  Errors
-  // during reload are logged but not fatal.
-  if (db) {
-    try {
-      await loadData();
-    } catch (err) {
-      console.error('Error reloading data after booking', err);
-    }
+    return res.status(500).json({ error: 'Failed to save booking' });
   }
   // Send booking confirmation email asynchronously.  Construct a cancel URL
   // using either APP_BASE_URL (when set) or the current request's host.  The
