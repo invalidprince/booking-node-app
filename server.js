@@ -1575,7 +1575,7 @@ app.get('/api/availability', (req, res) => {
 });
 
 // Auto-book: automatically assign the next available space of a given type.
-app.get('/api/bookings/auto', (req, res) => {
+app.get('/api/bookings/auto', async (req, res) => {
   try {
     const { type, date, start: startTime, end: endTime, name, email } = req.query;
     if (!type || !date || !startTime || !endTime || !name || !email) {
@@ -1617,15 +1617,27 @@ app.get('/api/bookings/auto', (req, res) => {
           checkedIn: false
         };
         bookings.push(booking);
-        // Persist immediately so that cancellation link works even if the process restarts
-        saveData().catch(err => console.error('Error saving data', err));
+        // Persist immediately so that cancellation link works even if the process restarts.
+        // Await persistence and optionally reload data from the database to avoid races
+        try {
+          await saveData();
+          if (db) {
+            try {
+              await loadData();
+            } catch (err) {
+              console.error('Error reloading data after auto booking', err);
+            }
+          }
+        } catch (err) {
+          console.error('Error saving new auto booking', err);
+          return res.status(500).json({ error: 'Failed to save auto booking' });
+        }
         // Send booking confirmation email asynchronously
         (async () => {
           try {
             const spaceName = space.name;
             const baseUrl = APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
             const cancelLink = `${baseUrl}/cancel/${id}`;
-            // Use helper to build and send booking confirmation email (auto context)
             await sendBookingConfirmationEmail(
               name,
               emailNormalized,
