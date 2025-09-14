@@ -753,9 +753,8 @@
           const autoRes = await fetch('/api/bookings/auto?' + params.toString());
           if (autoRes.ok) {
             if (window._pageState) window._pageState.offset = 0;
-            // Wait briefly to allow data persistence and then reload the bookings
-            await new Promise(resolve => setTimeout(resolve, 200));
-            await loadBookings();
+            // Reload immediately so the new booking appears without a page refresh
+            await refreshBookings();
             alert('Booking added successfully');
             document.getElementById('bName').value = '';
             document.getElementById('bEmail').value = '';
@@ -778,8 +777,8 @@
 
         if (res.ok) {
           if (window._pageState) window._pageState.offset = 0;
-          await new Promise(resolve => setTimeout(resolve, 200));
-          await loadBookings();
+          // Reload immediately so the new booking is visible without delay
+          await refreshBookings();
           // show confirmation and clear inputs
           alert('Booking added successfully');
           document.getElementById('bName').value = '';
@@ -814,23 +813,8 @@
         alert('Failed to cancel booking.');
       }
       // Always reload the bookings table so the UI reflects the current state.
-      
-      
-    
-      
-      
-      const res = await fetch('/api/admins', setAuthHeaders());
-      const admins = await res.json();
-        admins.sort((a, b) => (a.username || '').localeCompare((b.username || '')));
-    
-      const tbody = document.querySelector('#adminsTable tbody');
-      tbody.innerHTML = '';
-      admins.forEach(a => {
-        const tr = document.createElement('tr');
-        const role = a.role || 'admin';
-        tr.innerHTML = `<td>${a.username}</td><td>${role}</td><td><button data-id="${a.id}" class="delAdmin">Delete</button></td>`;
-        tbody.appendChild(tr);
-      });
+      if (window._pageState) window._pageState.offset = 0;
+      await refreshBookings();
     }
 
     // Create a new admin user
