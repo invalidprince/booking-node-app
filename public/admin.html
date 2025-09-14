@@ -124,13 +124,10 @@
     <div class="card">
       <h2>Analytics</h2>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-        <label for="analyticsPeriod">Period:</label>
-        <select id="analyticsPeriod">
-          <option value="month">This Month</option>
-          <option value="quarter">This Quarter</option>
-          <option value="year">This Year</option>
-          <option value="ytd">Year‑to‑date</option>
-        </select>
+        <label for="analyticsStart">Start:</label>
+        <input id="analyticsStart" type="date">
+        <label for="analyticsEnd">End:</label>
+        <input id="analyticsEnd" type="date">
         <button id="loadAnalyticsBtn">Load Analytics</button>
         <button id="loadSummaryBtn">Load Summary</button>
         <button id="downloadCsvBtn">Download CSV</button>
@@ -911,11 +908,14 @@
 
     // Load analytics data and render a table
     async function loadAnalytics() {
-      const periodSel = document.getElementById('analyticsPeriod');
-      const period = periodSel ? periodSel.value : 'month';
+      const start = document.getElementById('analyticsStart')?.value;
+      const end = document.getElementById('analyticsEnd')?.value;
       let url = '/api/analytics';
       const params = new URLSearchParams();
-      if (period) params.set('period', period);
+      if (start && end) {
+        params.set('start', start);
+        params.set('end', end);
+      }
       if (params.toString()) {
         url += '?' + params.toString();
       }
@@ -956,11 +956,14 @@
 
     // Load summary analytics (aggregated across all users) and render a simple view
     async function loadSummary() {
-      const periodSel = document.getElementById('analyticsPeriod');
-      const period = periodSel ? periodSel.value : 'month';
+      const start = document.getElementById('analyticsStart')?.value;
+      const end = document.getElementById('analyticsEnd')?.value;
       let url = '/api/analytics-summary';
       const params = new URLSearchParams();
-      if (period) params.set('period', period);
+      if (start && end) {
+        params.set('start', start);
+        params.set('end', end);
+      }
       if (params.toString()) url += '?' + params.toString();
       const res = await fetch(url, setAuthHeaders());
       if (!res.ok) {
@@ -1008,11 +1011,14 @@
 
     // Download the analytics CSV file for the selected period
     async function downloadCsv() {
-      const periodSel = document.getElementById('analyticsPeriod');
-      const period = periodSel ? periodSel.value : 'month';
+      const start = document.getElementById('analyticsStart')?.value;
+      const end = document.getElementById('analyticsEnd')?.value;
       let url = '/api/analytics-export';
       const params = new URLSearchParams();
-      if (period) params.set('period', period);
+      if (start && end) {
+        params.set('start', start);
+        params.set('end', end);
+      }
       if (params.toString()) url += '?' + params.toString();
       const res = await fetch(url, setAuthHeaders());
       if (!res.ok) {
